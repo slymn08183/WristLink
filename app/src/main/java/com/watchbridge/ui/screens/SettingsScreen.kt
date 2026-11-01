@@ -52,6 +52,7 @@ fun SettingsScreen(settings: SettingsManager, onOpenStats: () -> Unit) {
     val showPhoneInfo by settings.showPhoneInfo.collectAsState()
     val callsOnWatch by settings.callsOnWatch.collectAsState()
     val phoneBatteryAlert by settings.phoneBatteryAlert.collectAsState()
+    val statusNotification by settings.statusNotification.collectAsState()
 
     val categoryFilters = settings.getAllCategoryFilters()
     val listState = rememberScalingLazyListState()
@@ -238,6 +239,15 @@ fun SettingsScreen(settings: SettingsManager, onOpenStats: () -> Unit) {
                 item {
                     HintText("For call audio, tap this watch once in the phone's Bluetooth settings")
                 }
+            }
+
+            item {
+                SettingsToggle(
+                    label = "Status notification",
+                    secondaryLabel = if (statusNotification) "Most reliable connection" else "Hidden. Check stats for drops",
+                    checked = statusNotification,
+                    onCheckedChange = { settings.setStatusNotification(it) }
+                )
             }
 
             item {

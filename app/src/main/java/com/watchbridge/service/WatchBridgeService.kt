@@ -38,6 +38,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
@@ -286,11 +287,27 @@ class WatchBridgeService : Service() {
                 .collect { MediaTileService.requestUpdate(this@WatchBridgeService) }
         }
 
+        // Turning the status notification on or off in Settings takes effect right away
+        serviceScope.launch {
+            settings.statusNotification.drop(1).collect { show ->
+                if (show) {
+                    startForeground(NOTIFICATION_ID, buildNotification())
+                } else {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                }
+            }
+        }
+
         isRunning = true
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Required after startForegroundService() even when the user turned the notification off;
+        // in that case it's dropped again right away
         startForeground(NOTIFICATION_ID, buildNotification())
+        if (settingsManager?.statusNotification?.value == false) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        }
 
         when (intent?.action) {
             ACTION_CONNECT_BONDED -> {

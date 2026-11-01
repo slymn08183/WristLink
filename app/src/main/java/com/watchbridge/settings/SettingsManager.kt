@@ -26,6 +26,7 @@ class SettingsManager(context: Context) {
         private const val KEY_SHOW_PHONE_INFO = "show_phone_info"
         private const val KEY_CALLS_ON_WATCH = "calls_on_watch"
         private const val KEY_PHONE_BATTERY_ALERT = "phone_battery_alert"
+        private const val KEY_STATUS_NOTIFICATION = "status_notification"
         private const val KEY_CALL_PERMISSIONS_ASKED = "call_permissions_asked"
         private const val KEY_CATEGORY_PREFIX = "category_enabled_"
     }
@@ -126,6 +127,21 @@ class SettingsManager(context: Context) {
     fun setPhoneBatteryAlert(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_PHONE_BATTERY_ALERT, enabled).apply()
         _phoneBatteryAlert.value = enabled
+    }
+
+    private val _statusNotification = MutableStateFlow(prefs.getBoolean(KEY_STATUS_NOTIFICATION, true))
+
+    /**
+     * Keep the connection service in the foreground, with its notification. One UI Watch won't
+     * let that notification be cleared and has no per-channel switch, so it can be turned off:
+     * the service then runs as a plain background service, which Android allows because the app
+     * is exempt from battery optimization, but which the system may kill more readily.
+     */
+    val statusNotification: StateFlow<Boolean> = _statusNotification.asStateFlow()
+
+    fun setStatusNotification(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_STATUS_NOTIFICATION, enabled).apply()
+        _statusNotification.value = enabled
     }
 
     fun setShowPhoneInfo(enabled: Boolean) {
