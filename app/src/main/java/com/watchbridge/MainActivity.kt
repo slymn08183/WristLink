@@ -30,6 +30,7 @@ import com.watchbridge.ui.screens.NowPlayingScreen
 import com.watchbridge.ui.screens.OnboardingScreen
 import com.watchbridge.ui.screens.PairingScreen
 import com.watchbridge.ui.screens.SettingsScreen
+import com.watchbridge.ui.screens.StatsScreen
 import com.watchbridge.ui.theme.WatchBridgeTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -136,7 +137,13 @@ class MainActivity : ComponentActivity() {
                     }
                     composable("settings") {
                         val settings = WatchBridgeService.settingsManager ?: localSettings
-                        SettingsScreen(settings = settings)
+                        SettingsScreen(
+                            settings = settings,
+                            onOpenStats = { navController.navigate("stats") }
+                        )
+                    }
+                    composable("stats") {
+                        StatsScreen()
                     }
                     composable("media") {
                         NowPlayingScreen(media = WatchBridgeService.mediaManager)

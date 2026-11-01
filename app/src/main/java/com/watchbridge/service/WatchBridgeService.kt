@@ -15,6 +15,7 @@ import androidx.core.app.NotificationCompat
 import com.watchbridge.MainActivity
 import com.watchbridge.R
 import com.watchbridge.WatchBridgeApp
+import com.watchbridge.diagnostics.LinkStats
 import com.watchbridge.ams.AmsMediaManager
 import com.watchbridge.ams.MediaSessionBridge
 import com.watchbridge.ancs.AncsSessionManager
@@ -129,6 +130,7 @@ class WatchBridgeService : Service() {
         super.onCreate()
         Log.i(TAG, "Service created")
 
+        LinkStats.init(this)
         val settings = SettingsManager(this)
         val connMgr = BleConnectionManager(this)
         val bondMgr = BondManager(this)
@@ -208,6 +210,7 @@ class WatchBridgeService : Service() {
         serviceScope.launch {
             sm.state.collect { state ->
                 lastStateChangeMs = System.currentTimeMillis()
+                if (state == ConnectionStateMachine.State.READY) LinkStats.onLinkUp() else LinkStats.onLinkDown()
                 val statusText = when (state) {
                     ConnectionStateMachine.State.IDLE -> "Not connected"
                     ConnectionStateMachine.State.ADVERTISING -> "Waiting for phone..."

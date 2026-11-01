@@ -35,6 +35,7 @@ import androidx.wear.compose.material.ToggleChip
 import androidx.wear.compose.material.ToggleChipDefaults
 import com.watchbridge.R
 import com.watchbridge.ancs.AncsConstants
+import com.watchbridge.diagnostics.LinkStats
 import com.watchbridge.notification.NotificationIcons
 import com.watchbridge.settings.SettingsManager
 import com.watchbridge.ui.components.WatchBridgeScaffold
@@ -43,7 +44,7 @@ import com.watchbridge.update.AppUpdater
 import kotlin.math.roundToInt
 
 @Composable
-fun SettingsScreen(settings: SettingsManager) {
+fun SettingsScreen(settings: SettingsManager, onOpenStats: () -> Unit) {
     val vibration by settings.vibrationEnabled.collectAsState()
     val respectDnd by settings.respectDnd.collectAsState()
     val showPreExisting by settings.showPreExisting.collectAsState()
@@ -94,6 +95,31 @@ fun SettingsScreen(settings: SettingsManager) {
                     color = MaterialTheme.colors.primary,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.padding(bottom = 8.dp)
+                )
+            }
+
+            item {
+                val stats by LinkStats.summary.collectAsState()
+                Chip(
+                    onClick = onOpenStats,
+                    label = { Text("Connection stats", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    secondaryLabel = {
+                        Text(
+                            text = stats.medianDelayMs?.let { "Typical delay ${if (it < 1000) "<1" else it / 1000} s" }
+                                ?: "Delay, drops, uptime",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    },
+                    icon = {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_bluetooth),
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    },
+                    colors = ChipDefaults.secondaryChipColors(),
+                    modifier = Modifier.fillMaxWidth()
                 )
             }
 

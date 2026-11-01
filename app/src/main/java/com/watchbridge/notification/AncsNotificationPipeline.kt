@@ -10,6 +10,7 @@ import com.watchbridge.ancs.AncsConstants
 import com.watchbridge.ancs.AncsNotificationEvent
 import com.watchbridge.ancs.AncsSessionManager
 import com.watchbridge.ble.BleConnectionManager
+import com.watchbridge.diagnostics.LinkStats
 import com.watchbridge.settings.SettingsManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -56,6 +57,9 @@ class AncsNotificationPipeline(
     /** UIDs whose attributes haven't arrived yet → retries used so far. */
     private val awaitingAttributes = ConcurrentHashMap<UInt, Int>()
 
+    /** New (not pre-existing) notifications → when the watch heard about them, for LinkStats. */
+    private val announcedAt = ConcurrentHashMap<UInt, Long>()
+
     private val notificationManager =
         context.getSystemService(NotificationManager::class.java)
 
@@ -94,10 +98,18 @@ class AncsNotificationPipeline(
     private fun handleEvent(event: AncsNotificationEvent) {
         when {
             event.isAdded || event.isModified -> {
+                val heardAt = System.currentTimeMillis()
+
                 // Apply filters
                 if (!shouldShowNotification(event)) {
                     Log.d(TAG, "Filtered out: uid=${event.notificationUid} cat=${event.categoryName}")
                     return
+                }
+
+                // Only fresh notifications say anything about delay; pre-existing ones are old
+                // and a modified one keeps its original timestamp
+                if (event.isAdded && !event.isPreExisting) {
+                    announcedAt[event.notificationUid] = heardAt
                 }
 
                 // Nothing is shown until the content arrives (usually well under a second):
@@ -109,6 +121,7 @@ class AncsNotificationPipeline(
             event.isRemoved -> {
                 pendingEvents.remove(event.notificationUid)
                 awaitingAttributes.remove(event.notificationUid)
+                announcedAt.remove(event.notificationUid)
                 renderer.cancelNotification(event.notificationUid)
 
                 when (event.categoryId) {
@@ -177,6 +190,8 @@ class AncsNotificationPipeline(
             } else {
                 Log.e(TAG, "Giving up on attributes for uid=$uid")
                 awaitingAttributes.remove(uid)
+                announcedAt.remove(uid)
+                LinkStats.onContentUnavailable()
                 if (!pendingEvents.remove(uid, event)) return@launch
                 when (event.categoryId) {
                     AncsConstants.CATEGORY_INCOMING_CALL -> callHandler.showIncomingCall(event, null)
@@ -189,6 +204,13 @@ class AncsNotificationPipeline(
 
     private fun onNotificationAttributesReceived(attrs: AncsAttributeParser.NotificationAttributes) {
         awaitingAttributes.remove(attrs.notificationUid)
+        announcedAt.remove(attrs.notificationUid)?.let { announced ->
+            LinkStats.onNotification(
+                postedAtMs = attrs.timestampMillis,
+                announcedAtMs = announced,
+                emptyContent = attrs.message.isNullOrBlank() && attrs.subtitle.isNullOrBlank()
+            )
+        }
         val event = pendingEvents[attrs.notificationUid]
         if (event == null) {
             Log.w(TAG, "Received attributes for unknown uid=${attrs.notificationUid}")
@@ -257,6 +279,7 @@ class AncsNotificationPipeline(
     fun onDisconnected() {
         pendingEvents.clear()
         awaitingAttributes.clear()
+        announcedAt.clear()
         callHandler.cancelIncomingCall()
         callHandler.cancelActiveCall()
     }
