@@ -417,7 +417,7 @@ class WatchBridgeService : Service() {
             .notify(PHONE_BATTERY_NOTIFICATION_ID, notification)
     }
 
-    private fun buildNotification(statusText: String = "Keeping your phone connected. Swipe to hide"): Notification {
+    private fun buildNotification(statusText: String = "Keeping your phone connected"): Notification {
         val launchIntent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
             this, 0, launchIntent,
@@ -438,7 +438,8 @@ class WatchBridgeService : Service() {
             .setSmallIcon(R.drawable.ic_launcher)
             .setContentIntent(pendingIntent)
             .addAction(R.drawable.ic_launcher, "Stop", stopPendingIntent)
-            .setOngoing(true)
+            // Not ongoing: One UI Watch shows "Can't clear" for ongoing notifications, and since
+            // Android 13 a foreground service keeps running when its notification is dismissed
             .setSilent(true)
             .build()
     }

@@ -20,7 +20,9 @@ fun WatchBridgeScaffold(
         timeText = {
             if (showTimeText) {
                 // Slides the clock off as the list scrolls, so it never sits on top of list items
-                TimeText(modifier = Modifier.scrollAway(listState, itemIndex = 0))
+                // Index 1 matches the list's default initial center item; 0 would hide the clock
+                // before anything has scrolled
+                TimeText(modifier = Modifier.scrollAway(listState, itemIndex = 1))
             }
         },
         vignette = {
