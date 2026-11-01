@@ -43,7 +43,7 @@ object AppUpdater {
     private const val TAG = "AppUpdater"
 
     /** owner/name of the GitHub repo whose releases carry the APK. */
-    const val GITHUB_REPO = "WasThatRudy/watchbridge"
+    const val GITHUB_REPO = "slymn08183/WristLink"
     private const val LATEST_RELEASE_URL = "https://api.github.com/repos/$GITHUB_REPO/releases/latest"
 
     private const val NETWORK_TIMEOUT_MS = 15_000
