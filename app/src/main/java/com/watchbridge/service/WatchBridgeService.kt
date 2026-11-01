@@ -176,7 +176,6 @@ class WatchBridgeService : Service() {
             pipe.onDisconnected()
             sessMgr.onDisconnected()
             media.reset()
-            updateNotification("Reconnecting...")
         }
         sm.onSessionReset = {
             sessMgr.resetSession()
@@ -211,20 +210,9 @@ class WatchBridgeService : Service() {
             sm.state.collect { state ->
                 lastStateChangeMs = System.currentTimeMillis()
                 if (state == ConnectionStateMachine.State.READY) LinkStats.onLinkUp() else LinkStats.onLinkDown()
-                val statusText = when (state) {
-                    ConnectionStateMachine.State.IDLE -> "Not connected"
-                    ConnectionStateMachine.State.ADVERTISING -> "Waiting for phone..."
-                    ConnectionStateMachine.State.CONNECTING -> "Connecting..."
-                    ConnectionStateMachine.State.CONNECTED -> "Bonding & discovering..."
-                    ConnectionStateMachine.State.READY -> "Connected to phone"
-                    ConnectionStateMachine.State.DISCONNECTED -> "Disconnected"
-                    ConnectionStateMachine.State.WAITING_TO_RECONNECT -> "Waiting to reconnect..."
-                    ConnectionStateMachine.State.RECONNECTING -> "Reconnecting..."
-                    ConnectionStateMachine.State.WAITING_FOR_PHONE -> "Waiting for phone (out of range)"
-                    ConnectionStateMachine.State.BLUETOOTH_OFF -> "Bluetooth is off"
-                    ConnectionStateMachine.State.FAILED -> "Not paired"
-                }
-                updateNotification(statusText)
+                // The service notification is posted once and never updated: Android won't let it
+                // be hidden, but it can be swiped away, and re-posting it on every state change
+                // would bring it back each time. Live status is on the tile and in the app.
                 ConnectionTileService.requestUpdate(this@WatchBridgeService)
                 showBluetoothOffAlert(state == ConnectionStateMachine.State.BLUETOOTH_OFF)
 
@@ -302,7 +290,7 @@ class WatchBridgeService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIFICATION_ID, buildNotification("Starting..."))
+        startForeground(NOTIFICATION_ID, buildNotification())
 
         when (intent?.action) {
             ACTION_CONNECT_BONDED -> {
@@ -429,13 +417,7 @@ class WatchBridgeService : Service() {
             .notify(PHONE_BATTERY_NOTIFICATION_ID, notification)
     }
 
-    private fun updateNotification(statusText: String) {
-        val notification = buildNotification(statusText)
-        val nm = getSystemService(android.app.NotificationManager::class.java)
-        nm.notify(NOTIFICATION_ID, notification)
-    }
-
-    private fun buildNotification(statusText: String = "Active"): Notification {
+    private fun buildNotification(statusText: String = "Keeping your phone connected. Swipe to hide"): Notification {
         val launchIntent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
             this, 0, launchIntent,

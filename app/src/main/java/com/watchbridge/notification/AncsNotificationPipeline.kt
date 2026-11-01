@@ -40,8 +40,12 @@ class AncsNotificationPipeline(
         private const val TAG = "AncsNotifPipeline"
         private const val REQUEST_DELAY_MS = 100L
 
-        /** How long a first-time app's notification waits for its icon to download. */
-        private const val ICON_WAIT_MS = 3000L
+        /**
+         * Enough to read a bundled or cached icon, never enough to wait for a download: a
+         * first-time app's notification shows right away without its icon, and the download
+         * finishes in the background for the next one.
+         */
+        private const val ICON_WAIT_MS = 300L
 
         /** Ask again if iOS hasn't answered an attribute request by then. */
         private const val ATTRIBUTE_TIMEOUT_MS = 4000L
@@ -251,9 +255,9 @@ class AncsNotificationPipeline(
     }
 
     /**
-     * Cached icons come back immediately. An app we haven't seen before gets a short grace
-     * period to download; if that runs out we show the notification without an icon and the
-     * download keeps going in the background for next time.
+     * Cached icons come back immediately. For an app we haven't seen before the notification
+     * doesn't wait: it shows without an icon and the download keeps going in the background
+     * for next time.
      */
     private suspend fun resolveAppIcon(appId: String): Bitmap? =
         withTimeoutOrNull(ICON_WAIT_MS) { appIconResolver.getIcon(appId) }

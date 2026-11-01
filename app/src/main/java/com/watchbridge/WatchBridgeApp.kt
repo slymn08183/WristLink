@@ -74,6 +74,9 @@ class WatchBridgeApp : Application() {
         }
 
         val nm = getSystemService(NotificationManager::class.java)
+        // Channel of an early WristLink test build; Android raises a foreground service's
+        // IMPORTANCE_NONE channel to LOW, so it never managed to hide the notification
+        nm.deleteNotificationChannel("watchbridge_service_hidden")
         nm.createNotificationChannels(listOf(channel, alerts, media, phoneBattery, restTimer))
     }
 }
