@@ -58,9 +58,9 @@ class CameraRemote(private val context: Context) {
         )
 
         private val SDP_SETTINGS = BluetoothHidDeviceAppSdpSettings(
-            "WatchBridge Camera Remote",
+            "WristLink Camera Remote",
             "Camera shutter for phone",
-            "WatchBridge",
+            "WristLink",
             BluetoothHidDevice.SUBCLASS1_NONE,
             REPORT_DESCRIPTOR
         )

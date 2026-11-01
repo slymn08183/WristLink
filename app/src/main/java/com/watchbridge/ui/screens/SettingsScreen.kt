@@ -116,10 +116,10 @@ fun SettingsScreen(settings: SettingsManager) {
             item {
                 Chip(
                     onClick = openInstallSettings,
-                    label = { Text("Install unknown apps", maxLines = 1) },
+                    label = { Text("Allow updates", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     secondaryLabel = {
                         Text(
-                            text = if (canInstall) "Allowed" else "Not allowed · tap to open",
+                            text = if (canInstall) "Allowed" else "Tap to allow",
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -151,7 +151,7 @@ fun SettingsScreen(settings: SettingsManager) {
             item {
                 SettingsToggle(
                     label = "Vibration",
-                    secondaryLabel = "Vibrate for notifications (calls always vibrate)",
+                    secondaryLabel = "For notifications. Calls always buzz",
                     checked = vibration,
                     onCheckedChange = { settings.setVibrationEnabled(it) }
                 )
@@ -160,7 +160,7 @@ fun SettingsScreen(settings: SettingsManager) {
             item {
                 SettingsToggle(
                     label = "Respect DND",
-                    secondaryLabel = "Silence when phone is on DND",
+                    secondaryLabel = "Silent when phone is on DND",
                     checked = respectDnd,
                     onCheckedChange = { settings.setRespectDnd(it) }
                 )
@@ -168,8 +168,8 @@ fun SettingsScreen(settings: SettingsManager) {
 
             item {
                 SettingsToggle(
-                    label = "Phone battery alert",
-                    secondaryLabel = "Buzz when the phone drops below 20%",
+                    label = "Battery alert",
+                    secondaryLabel = "Buzz when the phone is below 20%",
                     checked = phoneBatteryAlert,
                     onCheckedChange = { settings.setPhoneBatteryAlert(it) }
                 )
@@ -177,8 +177,8 @@ fun SettingsScreen(settings: SettingsManager) {
 
             item {
                 SettingsToggle(
-                    label = "Show pre-existing",
-                    secondaryLabel = "Show notifications from before connecting",
+                    label = "Show older",
+                    secondaryLabel = "Include ones from before connecting",
                     checked = showPreExisting,
                     onCheckedChange = { settings.setShowPreExisting(it) }
                 )
@@ -195,8 +195,8 @@ fun SettingsScreen(settings: SettingsManager) {
 
             item {
                 SettingsToggle(
-                    label = "Answer calls on watch",
-                    secondaryLabel = "Talk on the watch when it's your phone's Bluetooth audio",
+                    label = "Calls on watch",
+                    secondaryLabel = "Talk through the watch",
                     checked = callsOnWatch && WatchCalls.hasPermissions(context),
                     onCheckedChange = { enable ->
                         if (enable && !WatchCalls.hasPermissions(context)) {
@@ -210,17 +210,14 @@ fun SettingsScreen(settings: SettingsManager) {
 
             if (callsOnWatch) {
                 item {
-                    HintText(
-                        "Connect the watch for call audio once: on your phone, " +
-                            "Settings → Bluetooth → tap this watch"
-                    )
+                    HintText("For call audio, tap this watch once in the phone's Bluetooth settings")
                 }
             }
 
             item {
                 SettingsToggle(
                     label = "Phone info on tile",
-                    secondaryLabel = "Phone name and battery on the Phone connection tile",
+                    secondaryLabel = "Name and battery on the tile",
                     checked = showPhoneInfo,
                     onCheckedChange = { settings.setShowPhoneInfo(it) }
                 )
@@ -354,7 +351,8 @@ private fun SettingsToggle(
             Text(
                 text = label,
                 style = MaterialTheme.typography.body2,
-                maxLines = 1
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         },
         secondaryLabel = if (secondaryLabel != null) {
@@ -363,7 +361,8 @@ private fun SettingsToggle(
                     text = secondaryLabel,
                     style = MaterialTheme.typography.caption3,
                     color = MaterialTheme.colors.onSurfaceVariant,
-                    maxLines = 2
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         } else null,

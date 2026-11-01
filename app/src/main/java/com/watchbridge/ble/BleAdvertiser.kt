@@ -37,7 +37,7 @@ class BleAdvertiser(private val context: Context) {
 
     companion object {
         private const val TAG = "BleAdvertiser"
-        private const val DEVICE_NAME = "WatchBridge"
+        private const val DEVICE_NAME = "WristLink"
 
         // Standard Bluetooth GATT service/characteristic UUIDs
         private val GAP_SERVICE_UUID = UUID.fromString("00001800-0000-1000-8000-00805f9b34fb")

@@ -84,7 +84,7 @@ fun HomeScreen(
             // Title
             item {
                 Text(
-                    text = "WatchBridge",
+                    text = "WristLink",
                     style = MaterialTheme.typography.title3,
                     color = MaterialTheme.colors.primary,
                     textAlign = TextAlign.Center
@@ -93,25 +93,24 @@ fun HomeScreen(
 
             // Status card
             item {
-                Spacer(Modifier.height(8.dp))
                 StatusCard(smState = smState, activeCount = session?.getActiveUidCount() ?: 0)
             }
 
-            // Action button
-            item {
-                Spacer(Modifier.height(8.dp))
-                ActionChip(
-                    smState = smState,
-                    onNavigateToPairing = onNavigateToPairing,
-                    onReconnect = onReconnect,
-                    onTurnOnBluetooth = onTurnOnBluetooth,
-                    onDisconnect = onDisconnect
-                )
+            // Action button: only up top when something needs doing; Disconnect sits at the bottom
+            if (smState != ConnectionStateMachine.State.READY) {
+                item {
+                    ActionChip(
+                        smState = smState,
+                        onNavigateToPairing = onNavigateToPairing,
+                        onReconnect = onReconnect,
+                        onTurnOnBluetooth = onTurnOnBluetooth,
+                        onDisconnect = onDisconnect
+                    )
+                }
             }
 
             // iPhone media controls
             item {
-                Spacer(Modifier.height(4.dp))
                 Chip(
                     onClick = onNavigateToMedia,
                     label = { Text("Now Playing") },
@@ -140,7 +139,6 @@ fun HomeScreen(
 
             // Settings chip
             item {
-                Spacer(Modifier.height(4.dp))
                 Chip(
                     onClick = onNavigateToSettings,
                     label = { Text("Settings") },
@@ -154,6 +152,43 @@ fun HomeScreen(
                     colors = ChipDefaults.secondaryChipColors(),
                     modifier = Modifier.fillMaxWidth()
                 )
+            }
+
+            // Reconnect always targets the remembered phone, so pairing a different (or re-paired)
+            // phone needs its own way in
+            if (smState != ConnectionStateMachine.State.READY &&
+                smState != ConnectionStateMachine.State.ADVERTISING
+            ) {
+                item {
+                    Chip(
+                        onClick = onNavigateToPairing,
+                        label = { Text("Pair a phone", maxLines = 1) },
+                        secondaryLabel = {
+                            Text("New or re-paired iPhone", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        },
+                        icon = {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_bluetooth),
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        },
+                        colors = ChipDefaults.secondaryChipColors(),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+
+            if (smState == ConnectionStateMachine.State.READY) {
+                item {
+                    ActionChip(
+                        smState = smState,
+                        onNavigateToPairing = onNavigateToPairing,
+                        onReconnect = onReconnect,
+                        onTurnOnBluetooth = onTurnOnBluetooth,
+                        onDisconnect = onDisconnect
+                    )
+                }
             }
         }
     }
@@ -287,7 +322,9 @@ private fun ActionChip(
                         modifier = Modifier.size(18.dp)
                     )
                 },
-                colors = ChipDefaults.primaryChipColors(),
+                // Quiet on purpose: disconnecting is rare and shouldn't be the screen's main action
+                colors = ChipDefaults.outlinedChipColors(),
+                border = ChipDefaults.outlinedChipBorder(),
                 modifier = Modifier.fillMaxWidth()
             )
         }

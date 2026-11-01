@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">WatchBridge</string>
+    <string name="app_name">WristLink</string>
     <string name="scanning">Scanning for phones...</string>
     <string name="connect">Connect</string>
     <string name="disconnect">Disconnect</string>
@@ -11,8 +11,8 @@
     <string name="connected">Connected</string>
     <string name="scan_for_iphone">Scan for phone</string>
     <string name="no_devices_found">No devices found</string>
-    <string name="notification_channel_service">WatchBridge Service</string>
-    <string name="service_notification_title">WatchBridge Active</string>
+    <string name="notification_channel_service">WristLink Service</string>
+    <string name="service_notification_title">WristLink Active</string>
     <string name="service_notification_text">Listening for phone notifications</string>
     <string name="tile_label">Phone connection</string>
     <string name="media_app_name">Music Control</string>

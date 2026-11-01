@@ -85,7 +85,8 @@ object AppUpdater {
                 val release = withFastNetwork(appContext) { network -> fetchLatestRelease(network) }
                 val installed = installedVersion(appContext)
                 when {
-                    release == null -> State.Failed("No release with an APK on GitHub yet")
+                    // Nothing published yet means there's nothing newer, not that the check broke
+                    release == null -> State.UpToDate(installed)
                     isNewerVersion(release.version, installed) -> State.Available(release)
                     else -> State.UpToDate(installed)
                 }
@@ -153,7 +154,7 @@ object AppUpdater {
         val connection = open(LATEST_RELEASE_URL, network)
         try {
             connection.setRequestProperty("Accept", "application/vnd.github+json")
-            connection.setRequestProperty("User-Agent", "WatchBridge")
+            connection.setRequestProperty("User-Agent", "WristLink")
             // No release published yet
             if (connection.responseCode == HttpURLConnection.HTTP_NOT_FOUND) return null
             if (connection.responseCode != HttpURLConnection.HTTP_OK) {

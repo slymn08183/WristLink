@@ -1,9 +1,14 @@
 package com.watchbridge.ui.screens
 
 import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothClass
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.content.Context
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -49,6 +54,7 @@ import com.watchbridge.service.WatchBridgeService
 import com.watchbridge.ui.components.WatchBridgeScaffold
 import com.watchbridge.ui.theme.SurfaceCard
 import kotlinx.coroutines.delay
+import java.util.UUID
 
 @SuppressLint("MissingPermission")
 @Composable
@@ -65,13 +71,34 @@ fun PairingScreen(
         ?: kotlinx.coroutines.flow.MutableStateFlow(ConnectionStateMachine.State.IDLE))
         .collectAsState()
 
-    val bondedDevices = adapter?.bondedDevices?.map { dev ->
-        BleScanner.ScannedDevice(
-            name = dev.name ?: "Bonded Device",
-            address = dev.address,
-            rssi = 0
+    // Only phones: the system list also holds earbuds, TVs and the Android phone the watch was
+    // set up with, none of which can be connected to like an iPhone
+    val bondedPhones = adapter?.bondedDevices
+        ?.filter { it.bluetoothClass?.majorDeviceClass == BluetoothClass.Device.Major.PHONE }
+        .orEmpty()
+    // iPhones advertise Apple's own SDP record; if any phone has it, hide the others (the Android
+    // phone used for watch setup can't be talked to over ANCS anyway)
+    val iPhones = bondedPhones.filter { dev -> dev.uuids?.any { it.uuid == APPLE_SDP_UUID } == true }
+    val bondedDevices = iPhones.ifEmpty { bondedPhones }
+        .map { dev ->
+            BleScanner.ScannedDevice(
+                name = dev.name ?: "Phone",
+                address = dev.address,
+                rssi = 0
+            )
+        }
+
+    // Galaxy watches only show up in the phone's Bluetooth list while they're discoverable
+    val discoverableLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { }
+    val startPairing = {
+        discoverableLauncher.launch(
+            Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE)
+                .putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, DISCOVERABLE_SECONDS)
         )
-    } ?: emptyList()
+        onStartAdvertising()
+    }
 
     // With "Answer calls on watch" on, pairing ends with one more step: making the watch the
     // phone's call audio. Often that link comes up with the pairing; this covers when it doesn't.
@@ -113,7 +140,7 @@ fun PairingScreen(
             if (bondedDevices.isNotEmpty()) {
                 item {
                     Text(
-                        text = "Previously Paired",
+                        text = "Paired before",
                         style = MaterialTheme.typography.caption1,
                         color = MaterialTheme.colors.primary,
                         modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)
@@ -127,18 +154,19 @@ fun PairingScreen(
                         },
                         label = {
                             Text(
-                                text = device.name ?: "Bonded Device",
+                                text = device.name ?: "Phone",
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
                         },
                         secondaryLabel = {
                             Text(
-                                text = device.address,
-                                style = MaterialTheme.typography.caption3
+                                text = "Tap to reconnect",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         },
-                        colors = ChipDefaults.primaryChipColors(),
+                        colors = ChipDefaults.secondaryChipColors(),
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
@@ -149,10 +177,20 @@ fun PairingScreen(
             when (smState) {
                 ConnectionStateMachine.State.ADVERTISING -> {
                     item {
-                        AdvertisingContent()
+                        AdvertisingContent(watchName = PAIRING_NAME)
                     }
                     item {
-                        Spacer(Modifier.height(12.dp))
+                        Chip(
+                            onClick = startPairing,
+                            label = { Text("Not showing up?", maxLines = 1) },
+                            secondaryLabel = {
+                                Text("Make the watch visible again", maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            },
+                            colors = ChipDefaults.secondaryChipColors(),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    item {
                         Chip(
                             onClick = {
                                 val adv = WatchBridgeService.advertiser
@@ -177,26 +215,28 @@ fun PairingScreen(
                 ConnectionStateMachine.State.CONNECTING,
                 ConnectionStateMachine.State.CONNECTED -> {
                     item {
-                        Spacer(Modifier.height(16.dp))
-                        CircularProgressIndicator()
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = "Connecting...\nAccept pairing on phone\nif prompted",
-                            style = MaterialTheme.typography.body2,
-                            textAlign = TextAlign.Center,
-                            color = MaterialTheme.colors.onSurfaceVariant
-                        )
+                        // A list item stacks its children on top of each other unless they're in a Column
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Spacer(Modifier.height(8.dp))
+                            CircularProgressIndicator()
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = "Connecting…\nAccept the pairing\non your phone",
+                                style = MaterialTheme.typography.body2,
+                                textAlign = TextAlign.Center,
+                                color = MaterialTheme.colors.onSurfaceVariant
+                            )
+                        }
                     }
                 }
 
                 else -> {
                     item {
-                        Spacer(Modifier.height(12.dp))
                         Chip(
-                            onClick = onStartAdvertising,
+                            onClick = startPairing,
                             label = {
                                 Text(
-                                    text = "Start Pairing",
+                                    text = "Start pairing",
                                     textAlign = TextAlign.Center,
                                     modifier = Modifier.fillMaxWidth()
                                 )
@@ -204,9 +244,10 @@ fun PairingScreen(
                             colors = ChipDefaults.primaryChipColors(),
                             modifier = Modifier.fillMaxWidth()
                         )
-                        Spacer(Modifier.height(4.dp))
+                    }
+                    item {
                         Text(
-                            text = "Makes this watch visible\nto your phone",
+                            text = "Turn off Bluetooth on any\nAndroid phone this watch\nwas set up with",
                             style = MaterialTheme.typography.caption2,
                             textAlign = TextAlign.Center,
                             color = MaterialTheme.colors.onSurfaceVariant
@@ -248,9 +289,9 @@ private fun CallAudioStep(watchName: String, onDone: () -> Unit) {
                 Spacer(Modifier.height(4.dp))
                 Text(
                     // The phone lists the watch once, under the name it was paired with
-                    // ("WatchBridge"); that one entry also carries the call audio
+                    // ("WristLink"); that one entry also carries the call audio
                     text = "On your phone: Settings → Bluetooth.\n" +
-                        "The watch you just paired (\"WatchBridge\" or \"$watchName\") " +
+                        "The watch you just paired (\"WristLink\" or \"$watchName\") " +
                         "should say Connected. If it says Not Connected, tap it.",
                     style = MaterialTheme.typography.caption1,
                     textAlign = TextAlign.Center,
@@ -281,8 +322,14 @@ private fun CallAudioStep(watchName: String, onDone: () -> Unit) {
     }
 }
 
+/** Name the watch advertises under while pairing (set by BleAdvertiser). */
+private const val PAIRING_NAME = "WristLink"
+private const val DISCOVERABLE_SECONDS = 300
+/** Apple-specific service record every iPhone exposes over Bluetooth Classic. */
+private val APPLE_SDP_UUID: UUID = UUID.fromString("00000000-deca-fade-deca-deafdecacafe")
+
 @Composable
-private fun AdvertisingContent() {
+private fun AdvertisingContent(watchName: String) {
     val transition = rememberInfiniteTransition(label = "advPulse")
     val pulseAlpha by transition.animateFloat(
         initialValue = 0.5f,
@@ -304,31 +351,38 @@ private fun AdvertisingContent() {
         }
         Spacer(Modifier.height(8.dp))
         Text(
-            text = "Ready to Pair",
+            text = "Ready to pair",
             style = MaterialTheme.typography.body1,
             textAlign = TextAlign.Center,
             color = MaterialTheme.colors.primary
         )
         Spacer(Modifier.height(8.dp))
 
-        // Consolidated instruction card
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(SurfaceCard, RoundedCornerShape(12.dp))
-                .padding(12.dp)
+                .padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    text = "On your phone:",
-                    style = MaterialTheme.typography.body2,
+                    text = "On your phone, open\nSettings → Bluetooth\nand tap",
+                    style = MaterialTheme.typography.caption1,
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colors.onSurfaceVariant
+                )
+                Spacer(Modifier.height(4.dp))
+                // The one thing to find in a long device list, so it gets the big type
+                Text(
+                    text = watchName,
+                    style = MaterialTheme.typography.title3,
                     textAlign = TextAlign.Center,
                     color = MaterialTheme.colors.onSurface
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = "1. Open Settings\n2. Tap Bluetooth\n3. Tap this watch to pair",
-                    style = MaterialTheme.typography.caption1,
+                    text = "It can be listed twice.\nEither one works.",
+                    style = MaterialTheme.typography.caption2,
                     textAlign = TextAlign.Center,
                     color = MaterialTheme.colors.onSurfaceVariant
                 )

@@ -42,7 +42,7 @@ fun OnboardingScreen(
         ) {
             item {
                 Text(
-                    text = "WatchBridge",
+                    text = "WristLink",
                     style = MaterialTheme.typography.title2,
                     color = MaterialTheme.colors.primary,
                     textAlign = TextAlign.Center
@@ -60,7 +60,6 @@ fun OnboardingScreen(
             }
 
             item {
-                Spacer(Modifier.height(8.dp))
                 Text(
                     text = "Setup Steps",
                     style = MaterialTheme.typography.caption1,
@@ -71,8 +70,8 @@ fun OnboardingScreen(
 
             val steps = listOf(
                 "1" to "Grant Bluetooth permissions when prompted",
-                "2" to "Tap 'Connect' and select your phone from the scan list",
-                "3" to "Accept the pairing request on your phone",
+                "2" to "Tap Start pairing, then tap WristLink in your iPhone's Bluetooth settings",
+                "3" to "Accept the pairing and allow notifications on your iPhone",
                 "4" to "Notifications will appear on your watch automatically"
             )
 
@@ -108,7 +107,6 @@ fun OnboardingScreen(
             }
 
             item {
-                Spacer(Modifier.height(4.dp))
                 Chip(
                     onClick = { },
                     label = {
@@ -125,7 +123,6 @@ fun OnboardingScreen(
             }
 
             item {
-                Spacer(Modifier.height(12.dp))
                 Chip(
                     onClick = onComplete,
                     label = {
