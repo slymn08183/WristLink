@@ -35,4 +35,10 @@
     <string name="watch_face_theme_amber">Amber</string>
     <string name="watch_face_theme_coral">Coral</string>
     <string name="watch_face_theme_white">White</string>
+    <string name="health_app_name">Health</string>
+    <string name="activity_tile_label">Activity</string>
+    <string name="heart_tile_label">Heart rate</string>
+    <string name="sleep_tile_label">Sleep</string>
+    <string name="heart_complication_label">Heart rate (WristLink)</string>
+    <string name="steps_complication_label">Steps (WristLink)</string>
 </resources>

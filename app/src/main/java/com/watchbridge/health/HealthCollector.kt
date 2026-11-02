@@ -35,11 +35,11 @@ object HealthCollector {
     private const val TAG = "HealthCollector"
     private const val PREFS = "health_collector"
 
-    // Calories are left out for now: Health Services reports the total burn, resting included,
-    // and Apple Health wants active and basal energy separately
     private val wanted = setOf(
         DataType.STEPS_DAILY,
         DataType.DISTANCE_DAILY,
+        DataType.CALORIES_DAILY,
+        DataType.FLOORS_DAILY,
         DataType.HEART_RATE_BPM
     )
 
@@ -60,6 +60,7 @@ object HealthCollector {
             return
         }
         scope.launch {
+            seedToday(app)
             try {
                 val client = HealthServices.getClient(app).passiveMonitoringClient
                 val caps = client.getCapabilitiesAsync().await()
@@ -83,6 +84,23 @@ object HealthCollector {
         }
     }
 
+    /**
+     * The history started empty: give it what today has collected so far (the running totals
+     * from before this version), spread from midnight, so today's screens aren't blank.
+     */
+    private fun seedToday(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        if (prefs.getBoolean("history.seeded", false)) return
+        val history = HealthHistory.get(context)
+        val now = System.currentTimeMillis()
+        for ((type, column) in listOf(HealthStore.STEPS to "steps", HealthStore.DISTANCE to "distance")) {
+            val time = prefs.getLong("$type.time", -1)
+            if (time < 0 || prefs.getLong("$type.day", -1) != dayOf(now)) continue
+            history.addSpread(column, startOfDay(time), time, prefs.getFloat("$type.total", 0f).toDouble())
+        }
+        prefs.edit().putBoolean("history.seeded", true).apply()
+    }
+
     private fun hasPermissions(context: Context) = listOf(
         Manifest.permission.ACTIVITY_RECOGNITION,
         Manifest.permission.BODY_SENSORS
@@ -94,31 +112,54 @@ object HealthCollector {
 
     fun onDataPoints(context: Context, points: DataPointContainer) {
         val store = HealthStore.get(context)
+        val history = HealthHistory.get(context)
         val boot = bootInstant()
 
-        // Daily types are running totals since midnight; store what was added since last time
-        recordDailyDelta(context, store, HealthStore.STEPS,
-            points.getData(DataType.STEPS_DAILY).map { it.getEndInstant(boot).toEpochMilli() to it.value.toDouble() })
-        recordDailyDelta(context, store, HealthStore.DISTANCE,
-            points.getData(DataType.DISTANCE_DAILY).map { it.getEndInstant(boot).toEpochMilli() to it.value })
-        recordDailyDelta(context, store, HealthStore.CALORIES,
-            points.getData(DataType.CALORIES_DAILY).map { it.getEndInstant(boot).toEpochMilli() to it.value })
+        // Daily types are running totals since midnight; keep what was added since last time,
+        // spread over the minutes it covers, and queue it for Apple Health
+        fun daily(type: String, column: String, totals: List<Pair<Long, Double>>, outbox: Boolean = true) =
+            recordDailyDelta(context, type, totals).onEach { (from, to, delta) ->
+                history.addSpread(column, from, to, delta)
+                if (outbox) store.add(type, from, to, delta)
+            }
 
-        for (hr in points.getData(DataType.HEART_RATE_BPM)) {
-            if (hr.value <= 0) continue
-            val t = hr.getTimeInstant(boot).toEpochMilli()
-            store.add(HealthStore.HEART_RATE, t, t, hr.value)
+        val steps = daily(HealthStore.STEPS, "steps",
+            points.getData(DataType.STEPS_DAILY).map { it.getEndInstant(boot).toEpochMilli() to it.value.toDouble() })
+        daily(HealthStore.DISTANCE, "distance",
+            points.getData(DataType.DISTANCE_DAILY).map { it.getEndInstant(boot).toEpochMilli() to it.value })
+        daily(HealthStore.FLOORS, "floors",
+            points.getData(DataType.FLOORS_DAILY).map { it.getEndInstant(boot).toEpochMilli() to it.value })
+        // Apple Health wants active energy; Health Services' total includes the resting burn
+        val calories = points.getData(DataType.CALORIES_DAILY).map { it.getEndInstant(boot).toEpochMilli() to it.value }
+        daily(HealthStore.CALORIES, "calories", calories, outbox = false).forEach { (from, to, delta) ->
+            val active = HealthMetrics.activePart(context, from, to, delta, dayTotal = calories.maxOf { it.second })
+            if (active > 0.5) store.add(HealthStore.ACTIVE_CALORIES, from, to, active)
         }
+
+        val heartRates = points.getData(DataType.HEART_RATE_BPM)
+            .filter { it.value > 0 }
+            .map { it.getTimeInstant(boot).toEpochMilli() to it.value }
+            .sortedBy { it.first }
+        for ((t, bpm) in heartRates) {
+            store.add(HealthStore.HEART_RATE, t, t, bpm)
+            history.addHeartRate(t, bpm)
+        }
+        heartRates.lastOrNull()?.let { (t, bpm) -> LiveHealth.onHeartRate(context, t, bpm) }
+        if (steps.isNotEmpty()) LiveHealth.onActivity(context, lastMove = steps.last().second)
+
+        rollDay(context)
+        HealthAlerts.onNewData(context)
     }
 
+    /** One stretch of a daily total: from, to, amount added. */
     private fun recordDailyDelta(
         context: Context,
-        store: HealthStore,
         type: String,
         totals: List<Pair<Long, Double>>
-    ) {
-        if (totals.isEmpty()) return
+    ): List<Triple<Long, Long, Double>> {
+        if (totals.isEmpty()) return emptyList()
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val added = mutableListOf<Triple<Long, Long, Double>>()
         for ((time, total) in totals.sortedBy { it.first }) {
             val day = dayOf(time)
             val lastDay = prefs.getLong("$type.day", -1)
@@ -131,7 +172,7 @@ object HealthCollector {
             } else {
                 lastTime to total - lastTotal
             }
-            if (delta > 0 && time > from) store.add(type, from, time, delta)
+            if (delta > 0 && time > from) added += Triple(from, time, delta)
             if (day != lastDay || total >= lastTotal) {
                 prefs.edit()
                     .putLong("$type.day", day)
@@ -140,6 +181,25 @@ object HealthCollector {
                     .apply()
             }
         }
+        return added
+    }
+
+    /**
+     * Once per day: queue yesterday's resting heart rate for Apple Health and drop history
+     * older than HealthHistory keeps.
+     */
+    private fun rollDay(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val today = startOfDay(System.currentTimeMillis())
+        val last = prefs.getLong("rolled", -1)
+        if (last == today) return
+        prefs.edit().putLong("rolled", today).apply()
+        if (last < 0) return
+        val yesterday = startOfDay(today - 12 * 3600 * 1000L)
+        HealthMetrics.restingHr(context, yesterday)?.let {
+            HealthStore.get(context).add(HealthStore.RESTING_HR, yesterday, yesterday, it.toDouble())
+        }
+        HealthHistory.get(context).prune()
     }
 
     fun onUserActivity(context: Context, info: UserActivityInfo) {
@@ -150,10 +210,18 @@ object HealthCollector {
         Log.i(TAG, "User activity: ${info.userActivityState} at ${info.stateChangeTime}")
 
         if (asleep && sleepStart < 0) {
+            // Back to sleep soon after waking: the time between was awake inside the same night
+            val lastEnd = prefs.getLong("sleep.lastEnd", -1)
+            if (lastEnd in (changedAt - HealthMetrics.NIGHT_GAP_MS) until changedAt) {
+                HealthStore.get(context).add(HealthStore.AWAKE, lastEnd, changedAt, 1.0)
+            }
             prefs.edit().putLong("sleep.start", changedAt).apply()
         } else if (!asleep && sleepStart >= 0) {
-            if (changedAt > sleepStart) HealthStore.get(context).add(HealthStore.SLEEP, sleepStart, changedAt, 1.0)
-            prefs.edit().remove("sleep.start").apply()
+            if (changedAt > sleepStart) {
+                HealthStore.get(context).add(HealthStore.SLEEP, sleepStart, changedAt, 1.0)
+                HealthHistory.get(context).addSleep(sleepStart, changedAt)
+            }
+            prefs.edit().remove("sleep.start").putLong("sleep.lastEnd", changedAt).apply()
         }
         onSleepStateChanged?.invoke(asleep)
     }
@@ -161,6 +229,10 @@ object HealthCollector {
     /** The platform said "asleep" and hasn't said otherwise since. */
     fun isAsleepNow(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getLong("sleep.start", -1) >= 0
+
+    /** When the stretch of sleep going on now began, or null when awake. */
+    fun asleepSince(context: Context): Long? =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getLong("sleep.start", -1).takeIf { it >= 0 }
 
     private fun dayOf(time: Long): Long {
         val c = Calendar.getInstance().apply { timeInMillis = time }

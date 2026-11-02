@@ -8,6 +8,7 @@ import android.provider.Settings
 import androidx.core.content.ContextCompat
 import com.watchbridge.call.WatchCalls
 import com.watchbridge.health.HealthCollector
+import com.watchbridge.health.HealthProfile
 import com.watchbridge.settings.SettingsManager
 import com.watchbridge.sleep.SleepGuard
 import org.json.JSONArray
@@ -53,6 +54,7 @@ object RemoteSettings {
             .put("quietNow", SleepGuard.isAsleep(context))
             .put("sleepDetection", if (SleepGuard.usesWatchSleepDetection) "watch" else "steps")
             .put("sleepGuardReady", SleepGuard.hasControl(context))
+            .put("profile", HealthProfile.current(context).toJson())
             .put("categories", JSONArray(SettingsManager.CATEGORIES.map { (id, name) ->
                 JSONObject().put("id", id.toInt()).put("name", name).put("enabled", filters[id] ?: true)
             }))
@@ -106,6 +108,7 @@ object RemoteSettings {
                 s.setSleepGuard(on)
                 SleepGuard.schedule(context)
             }
+            key.startsWith("profile.") -> return HealthProfile.get(context).apply(key.removePrefix("profile."), value)
             key.startsWith("category.") -> s.setCategoryEnabled(key.removePrefix("category.").toByte(), on)
 
             key == "raiseToWake" -> Settings.Secure.putInt(resolver, WAKE_GESTURE, if (on) 1 else 0)

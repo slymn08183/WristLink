@@ -21,6 +21,10 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import com.watchbridge.diagnostics.LinkStats
 import com.watchbridge.health.HealthCollector
+import com.watchbridge.health.HealthHistory
+import com.watchbridge.health.HealthMetrics
+import com.watchbridge.health.HealthProfile
+import com.watchbridge.health.LiveHealth
 import com.watchbridge.health.HealthStore
 import com.watchbridge.settings.SettingsManager
 import com.watchbridge.weather.WeatherStore
@@ -61,7 +65,7 @@ class CompanionGattServer(private val context: Context) {
 
     companion object {
         private const val TAG = "CompanionGatt"
-        const val PROTOCOL_VERSION = 5
+        const val PROTOCOL_VERSION = 6
 
         val SERVICE_UUID: UUID = UUID.fromString("57a1e1c0-0001-4b8e-9a1f-6f4b10000000")
         val INFO_UUID: UUID = UUID.fromString("57a1e1c0-0002-4b8e-9a1f-6f4b10000000")
@@ -114,6 +118,7 @@ class CompanionGattServer(private val context: Context) {
     private var lastPendingNotifyMs = 0L
 
     private var settingsWatcher: Job? = null
+    private var profileWatcher: Job? = null
     private var settingsPush: Job? = null
     /** What was last sent, so a push that changes nothing stays off the air. */
     private var lastSettingsSent: String? = null
@@ -219,6 +224,7 @@ class CompanionGattServer(private val context: Context) {
             ContextCompat.RECEIVER_NOT_EXPORTED
         )
         settingsWatcher = scope.launch { SettingsManager.get(context).changes.collect { onSettingsChanged() } }
+        profileWatcher = scope.launch { HealthProfile.get(context).state.collect { onSettingsChanged() } }
         Log.i(TAG, "Companion service up (protocol $PROTOCOL_VERSION)")
     }
 
@@ -226,6 +232,7 @@ class CompanionGattServer(private val context: Context) {
         runCatching { context.unregisterReceiver(batteryReceiver) }
         runCatching { context.unregisterReceiver(dndReceiver) }
         settingsWatcher?.cancel()
+        profileWatcher?.cancel()
         server?.close()
         server = null
     }
@@ -328,6 +335,10 @@ class CompanionGattServer(private val context: Context) {
                 Log.i(TAG, "setSetting $key=$value ${error ?: "ok"}")
                 sendSettings(device, error)
             }
+            "summary" -> {
+                val days = request.optInt("days", 7).coerceIn(1, 14)
+                sendMessage(device, HealthMetrics.summaryJson(context, days))
+            }
             "weather" -> {
                 WeatherStore.save(context, request)
                 notifyInfo()
@@ -428,6 +439,8 @@ class CompanionGattServer(private val context: Context) {
             .put("notifications", stats.notifications)
             .put("pending", store.pendingCount())
             .put("sleepSupported", HealthCollector.platformSleepSupported.value)
+            .put("workoutsPending", HealthHistory.get(context).unsyncedWorkoutCount())
+            .put("hr", LiveHealth.latest(context)?.let { JSONObject().put("bpm", it.bpm).put("t", it.time) })
             // When the forecast on the watch was fetched (s), so the iPhone knows when to send a new one
             .put("weatherAt", WeatherStore.fetchedAtSeconds(context))
             .toString()

@@ -344,6 +344,103 @@
                 android:resource="@drawable/ic_launcher_timer" />
         </service>
 
+        <!-- Fifth launcher icon, "Health": today's activity, heart rate, sleep, profile -->
+        <activity
+            android:name=".ui.HealthActivity"
+            android:exported="true"
+            android:icon="@drawable/ic_launcher_health"
+            android:label="@string/health_app_name"
+            android:taskAffinity="com.watchbridge.health">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Heart rate and inactivity alerts: the inactivity alarm and its "Not now" button -->
+        <receiver
+            android:name=".health.HealthAlertReceiver"
+            android:exported="false" />
+
+        <!-- Health tiles -->
+        <service
+            android:name=".tile.ActivityTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_steps"
+            android:label="@string/activity_tile_label"
+            android:permission="com.google.android.wearable.permission.BIND_TILE_PROVIDER">
+            <intent-filter>
+                <action android:name="androidx.wear.tiles.action.BIND_TILE_PROVIDER" />
+            </intent-filter>
+            <meta-data
+                android:name="androidx.wear.tiles.PREVIEW"
+                android:resource="@drawable/ic_launcher_health" />
+        </service>
+
+        <service
+            android:name=".tile.HeartRateTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_heart"
+            android:label="@string/heart_tile_label"
+            android:permission="com.google.android.wearable.permission.BIND_TILE_PROVIDER">
+            <intent-filter>
+                <action android:name="androidx.wear.tiles.action.BIND_TILE_PROVIDER" />
+            </intent-filter>
+            <meta-data
+                android:name="androidx.wear.tiles.PREVIEW"
+                android:resource="@drawable/ic_launcher_health" />
+        </service>
+
+        <service
+            android:name=".tile.SleepTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_sleep"
+            android:label="@string/sleep_tile_label"
+            android:permission="com.google.android.wearable.permission.BIND_TILE_PROVIDER">
+            <intent-filter>
+                <action android:name="androidx.wear.tiles.action.BIND_TILE_PROVIDER" />
+            </intent-filter>
+            <meta-data
+                android:name="androidx.wear.tiles.PREVIEW"
+                android:resource="@drawable/ic_launcher_health" />
+        </service>
+
+        <!-- Our own heart rate and steps for any watch face. LiveHealth pushes updates when new
+             data arrives (period 0 = no polling). -->
+        <service
+            android:name=".health.HeartRateComplicationService"
+            android:exported="true"
+            android:icon="@drawable/ic_heart"
+            android:label="@string/heart_complication_label"
+            android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
+            <intent-filter>
+                <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
+            </intent-filter>
+            <meta-data
+                android:name="android.support.wearable.complications.SUPPORTED_TYPES"
+                android:value="SHORT_TEXT,RANGED_VALUE,LONG_TEXT" />
+            <meta-data
+                android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
+                android:value="0" />
+        </service>
+
+        <service
+            android:name=".health.ActivityComplicationService"
+            android:exported="true"
+            android:icon="@drawable/ic_steps"
+            android:label="@string/steps_complication_label"
+            android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
+            <intent-filter>
+                <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
+            </intent-filter>
+            <meta-data
+                android:name="android.support.wearable.complications.SUPPORTED_TYPES"
+                android:value="GOAL_PROGRESS,RANGED_VALUE,SHORT_TEXT,LONG_TEXT" />
+            <meta-data
+                android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
+                android:value="0" />
+        </service>
+
         <!-- Launched by the tile's Reconnect chip; tiles can only start activities -->
         <activity
             android:name=".tile.ReconnectActivity"

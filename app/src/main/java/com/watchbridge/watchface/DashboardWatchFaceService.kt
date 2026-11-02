@@ -19,6 +19,8 @@ import androidx.wear.watchface.style.UserStyleSchema
 import androidx.wear.watchface.style.UserStyleSetting
 import androidx.wear.watchface.style.WatchFaceLayer
 import com.watchbridge.R
+import com.watchbridge.health.ActivityComplicationService
+import com.watchbridge.health.HeartRateComplicationService
 import com.watchbridge.weather.SunComplicationService
 
 /**
@@ -30,9 +32,9 @@ import com.watchbridge.weather.SunComplicationService
 class DashboardWatchFaceService : WatchFaceService() {
 
     companion object {
-        // Ids start at 10: earlier builds used 0-3 with other defaults, and the watch keeps a
-        // slot's data source by id
-        private const val EDGE_SLOT_BASE = 10
+        // Ids start at 30: earlier builds used 0-3 and 10-13 with other defaults (Samsung Health's
+        // heart rate, which freezes), and the watch keeps a slot's data source by id
+        private const val EDGE_SLOT_BASE = 30
         private const val BOX_SLOT = 20
         private const val SHEALTH = "com.samsung.android.wear.shealth"
         private const val SHEALTH_COMPLICATIONS = "$SHEALTH.complications"
@@ -98,13 +100,22 @@ class DashboardWatchFaceService : WatchFaceService() {
         )
         val defaults = mapOf(
             EdgeComplication.Corner.TOP_LEFT to DefaultComplicationDataSourcePolicy(
-                SystemDataSources.DATA_SOURCE_STEP_COUNT, ComplicationType.GOAL_PROGRESS
+                ComponentName(this, ActivityComplicationService::class.java),
+                ComplicationType.RANGED_VALUE,
+                SystemDataSources.DATA_SOURCE_STEP_COUNT,
+                ComplicationType.GOAL_PROGRESS
             ),
             EdgeComplication.Corner.TOP_RIGHT to DefaultComplicationDataSourcePolicy(
                 SystemDataSources.DATA_SOURCE_WATCH_BATTERY, ComplicationType.RANGED_VALUE
             ),
             EdgeComplication.Corner.BOTTOM_RIGHT to shealth("spo2.BloodOxygenComplicationProviderService"),
-            EdgeComplication.Corner.BOTTOM_LEFT to shealth("heartrate.HeartrateComplicationProviderService")
+            // Our own heart rate (LiveHealth) is pushed on every new reading; Samsung's isn't
+            EdgeComplication.Corner.BOTTOM_LEFT to DefaultComplicationDataSourcePolicy(
+                ComponentName(this, HeartRateComplicationService::class.java),
+                ComplicationType.SHORT_TEXT,
+                SystemDataSources.NO_DATA_SOURCE,
+                ComplicationType.NOT_CONFIGURED
+            )
         )
         val edges = EdgeComplication.Corner.entries.map { corner ->
             ComplicationSlot.createRoundRectComplicationSlotBuilder(

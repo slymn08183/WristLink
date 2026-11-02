@@ -22,6 +22,10 @@ class HealthStore private constructor(context: Context) :
         const val CALORIES = "calories"
         const val HEART_RATE = "hr"
         const val SLEEP = "sleep"
+        const val FLOORS = "floors"
+        const val ACTIVE_CALORIES = "activeCalories"
+        const val AWAKE = "awake"
+        const val RESTING_HR = "restingHr"
 
         /** Kept at most this long when the iPhone never picks them up. */
         private const val MAX_AGE_MS = 14L * 24 * 60 * 60 * 1000
