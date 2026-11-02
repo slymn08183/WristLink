@@ -31,17 +31,21 @@ final class HealthSync: ObservableObject {
 
     /// Sends a message to the watch's sync characteristic (set by WatchLink).
     var send: (([String: Any]) -> Void)?
+    /// Called when a sync ends: how many samples it saved, or nil when it stopped on an error.
+    var onFinished: ((Int?) -> Void)?
     var deviceModel: String?
     var watchAppVersion: String?
 
     private let store = HKHealthStore()
     private static let batchSize = 100
+    private var savedThisRun = 0
 
     /// Ask the watch for what it has, unless a sync is already running.
     func start() {
         guard !syncing, HKHealthStore.isHealthDataAvailable(), let send else { return }
         syncing = true
         lastError = nil
+        savedThisRun = 0
         send(["op": "pull", "after": 0, "max": Self.batchSize])
     }
 
@@ -64,6 +68,7 @@ final class HealthSync: ObservableObject {
                     return
                 }
                 self.lastCount += batch.items.count
+                self.savedThisRun += batch.items.count
                 self.send?(["op": "ack", "upTo": lastId])
                 if batch.more {
                     self.send?(["op": "pull", "after": lastId, "max": Self.batchSize])
@@ -83,6 +88,7 @@ final class HealthSync: ObservableObject {
         syncing = false
         lastError = error
         if error == nil { lastSync = Date() }
+        onFinished?(error == nil ? savedThisRun : nil)
     }
 
     private lazy var device = HKDevice(
@@ -125,6 +131,21 @@ final class HealthSync: ObservableObject {
                 value: HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue,
                 start: start, end: end, device: device, metadata: metadata
             )
+        // Protocol 6
+        case "floors":
+            return quantity(.flightsClimbed, .count())
+        case "activeCalories":
+            return quantity(.activeEnergyBurned, .kilocalorie())
+        case "awake":
+            // An awake stretch inside a night, next to the asleep ones
+            return HKCategorySample(
+                type: HKCategoryType(.sleepAnalysis),
+                value: HKCategoryValueSleepAnalysis.awake.rawValue,
+                start: start, end: end, device: device, metadata: metadata
+            )
+        case "restingHr":
+            // The day's resting heart rate, stamped at that day's local midnight
+            return quantity(.restingHeartRate, HKUnit.count().unitDivided(by: .minute()))
         default:
             // A type from a newer watch app this version doesn't know yet
             return nil

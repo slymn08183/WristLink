@@ -311,15 +311,26 @@ private struct HealthTab: View {
                     if access.status == .notAsked {
                         accessCard
                     }
-                    SyncCard(sync: link.health, pending: link.info?.pending) { link.syncHealth() }
+                    // Samsung Health's phone layout: today, by the hour, heart, sleep, workouts, the week
+                    HealthDashboard(summary: link.summary, workouts: link.workouts,
+                                    protocolVersion: link.protocolVersion,
+                                    settingsProfile: link.settings?.profile,
+                                    latestHeartRate: link.info?.hr)
+                    SyncCard(sync: link.health, workouts: link.workouts, pending: link.info?.pending,
+                             workoutsPending: link.protocolVersion >= 6 ? link.info?.workoutsPending : nil) {
+                        link.syncHealth()
+                    }
                     stepsChart
                     whatSyncs
                 }
                 .padding()
             }
             .background(Theme.background)
-            .navigationTitle("Apple Health")
-            .refreshable { await stats.refresh() }
+            .navigationTitle("Health")
+            .refreshable {
+                link.refreshSummary()
+                await stats.refresh()
+            }
             .task { await stats.refresh() }
         }
     }
@@ -328,7 +339,7 @@ private struct HealthTab: View {
         VStack(alignment: .leading, spacing: 12) {
             Label("Connect to Apple Health", systemImage: "heart.text.square.fill")
                 .font(.headline).foregroundStyle(.pink)
-            Text("Allow WristLink to save steps, distance, heart rate and sleep from the watch.")
+            Text("Allow WristLink to save steps, distance, floors, energy, heart rate, sleep and workouts with their routes from the watch.")
                 .font(.subheadline).foregroundStyle(.secondary)
             Button {
                 Task {
@@ -378,9 +389,11 @@ private struct HealthTab: View {
         VStack(alignment: .leading, spacing: 10) {
             Label("From the watch", systemImage: "arrow.down.heart")
                 .font(.subheadline.weight(.semibold))
-            ForEach([("figure.walk", "Steps and distance"),
-                     ("heart", "Heart rate"),
-                     ("bed.double", "Sleep (the watch's own sleep detection)")], id: \.1) { icon, text in
+            ForEach([("figure.walk", "Steps, distance and floors"),
+                     ("flame", "Active energy"),
+                     ("heart", "Heart rate and resting heart rate"),
+                     ("bed.double", "Sleep and awake stretches (the watch's own sleep detection)"),
+                     ("figure.run", "Workouts with their GPS route")], id: \.1) { icon, text in
                 Label(text, systemImage: icon).font(.subheadline).foregroundStyle(.secondary)
             }
             Text("The watch keeps everything until the iPhone has saved it, and sends it on its own every 15 minutes or so.")
@@ -393,13 +406,18 @@ private struct HealthTab: View {
 
 private struct SyncCard: View {
     @ObservedObject var sync: HealthSync
+    @ObservedObject var workouts: WorkoutSync
     let pending: Int?
+    /// Nil for a watch without workouts (protocol 5 and older).
+    let workoutsPending: Int?
     let onSync: () -> Void
+
+    private var busy: Bool { sync.syncing || workouts.syncing }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Label(sync.syncing ? "Syncing…" : "Sync", systemImage: "arrow.triangle.2.circlepath")
+                Label(busy ? "Syncing…" : "Sync", systemImage: "arrow.triangle.2.circlepath")
                     .font(.headline)
                 Spacer()
                 if let lastSync = sync.lastSync {
@@ -411,16 +429,20 @@ private struct SyncCard: View {
                 Metric(value: pending.map(String.init) ?? "–", label: "waiting on watch")
                 Divider().frame(height: 36)
                 Metric(value: "\(sync.lastCount)", label: "saved this session")
+                if let workoutsPending {
+                    Divider().frame(height: 36)
+                    Metric(value: "\(workoutsPending)", label: workoutsPending == 1 ? "workout waiting" : "workouts waiting")
+                }
             }
             if let error = sync.lastError {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .font(.footnote).foregroundStyle(.orange)
             }
             Button(action: onSync) {
-                Text(sync.syncing ? "Syncing…" : "Sync now").frame(maxWidth: .infinity)
+                Text(busy ? "Syncing…" : "Sync now").frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(sync.syncing)
+            .disabled(busy)
         }
         .card()
     }
@@ -510,6 +532,32 @@ private struct SettingsTab: View {
                 Text("Sleep")
             } footer: {
                 Text(sleepFooter(s))
+            }
+
+            if link.protocolVersion >= 6 {
+                Section {
+                    NavigationLink {
+                        ProfileSettingsView()
+                    } label: {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Body, goals and alerts")
+                                if let p = s.profile {
+                                    Text("\(p.isFemale ? "Female" : "Male") · \(p.age) · \(p.heightCm) cm · \(p.weightKg) kg · \(Format.number(Double(p.stepGoal))) steps")
+                                        .font(.footnote).foregroundStyle(.secondary)
+                                }
+                            }
+                        } icon: {
+                            Image(systemName: "person.crop.circle")
+                        }
+                    }
+                } header: {
+                    Text("Profile & goals")
+                } footer: {
+                    if s.profile?.configured == false {
+                        Text("Set these once: calories, heart-rate zones and your resting range depend on them.")
+                    }
+                }
             }
 
             WeatherSection(weather: link.weather)
@@ -670,7 +718,7 @@ enum Theme {
     static let card = Color(.secondarySystemGroupedBackground)
 }
 
-private extension View {
+extension View {
     func card() -> some View {
         padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -716,7 +764,7 @@ private struct StatTile: View {
     }
 }
 
-private struct Metric: View {
+struct Metric: View {
     let value: String
     let label: String
 
@@ -754,6 +802,47 @@ enum Format {
         case ..<1.25: return "Large"
         default: return "Largest"
         }
+    }
+
+    /// "4,312"
+    static func number(_ value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(0)))
+    }
+
+    /// "7h 12m", or "38m" under an hour.
+    static func minutes(_ minutes: Double) -> String {
+        let total = max(0, Int(minutes.rounded()))
+        return total >= 60 ? "\(total / 60)h \(total % 60)m" : "\(total)m"
+    }
+
+    /// "3.12 km", or "640 m" under a kilometer.
+    static func distance(_ meters: Double) -> String {
+        meters >= 1000 ? String(format: "%.2f km", meters / 1000) : "\(Int(meters.rounded())) m"
+    }
+
+    /// Running pace, "5'32\" /km".
+    static func pace(secondsPerKm: Double) -> String {
+        guard secondsPerKm.isFinite, secondsPerKm > 0 else { return "–" }
+        let seconds = Int(secondsPerKm.rounded())
+        return String(format: "%ld'%02ld\" /km", seconds / 60, seconds % 60)
+    }
+
+    /// "1:02:15", or "32:05" under an hour.
+    static func elapsed(_ seconds: TimeInterval) -> String {
+        let total = max(0, Int(seconds.rounded()))
+        let h = total / 3600, m = (total % 3600) / 60, s = total % 60
+        return h > 0 ? String(format: "%ld:%02ld:%02ld", h, m, s) : String(format: "%ld:%02ld", m, s)
+    }
+
+    /// A time of day from minutes after midnight, in the user's 12/24-hour style.
+    static func clock(minutesAfterMidnight minutes: Int) -> String {
+        let midnight = Calendar.current.startOfDay(for: Date())
+        let date = midnight.addingTimeInterval(TimeInterval(((minutes % 1440) + 1440) % 1440 * 60))
+        return date.formatted(date: .omitted, time: .shortened)
+    }
+
+    static func time(_ date: Date) -> String {
+        date.formatted(date: .omitted, time: .shortened)
     }
 }
 

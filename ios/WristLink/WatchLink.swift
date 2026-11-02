@@ -17,11 +17,25 @@ struct WatchInfo: Decodable, Equatable {
     let sleepSupported: Bool?
     // Protocol 4: when the watch's forecast was fetched (Unix seconds, 0 for none)
     let weatherAt: Int64?
+    // Protocol 6
+    /// Workouts recorded on the watch that the iPhone hasn't confirmed yet.
+    let workoutsPending: Int?
+    /// The latest heart rate the watch measured.
+    let hr: HeartRate?
+
+    struct HeartRate: Decodable, Equatable {
+        let bpm: Double?
+        /// When it was measured, ms.
+        let t: Double?
+
+        var date: Date? { t.map { Date(timeIntervalSince1970: $0 / 1000) } }
+    }
 
     enum CodingKeys: String, CodingKey {
         case protocolVersion = "protocol"
         case app, battery, charging, connectedPct, drops, medianDelayMs, notifications
         case model, pending, sleepSupported, weatherAt
+        case workoutsPending, hr
     }
 }
 
@@ -67,6 +81,10 @@ final class WatchLink: NSObject, ObservableObject {
     let weather = WeatherFeed()
     /// App icons and album art the watch asks for.
     let images = ImageFetcher()
+    /// The watch's own daily numbers for the Health tab (protocol 6).
+    let summary = SummaryFeed()
+    /// Workouts recorded on the watch, into Apple Health (protocol 6).
+    let workouts = WorkoutSync()
 
     private var central: CBCentralManager!
     private var watch: CBPeripheral?
@@ -75,12 +93,25 @@ final class WatchLink: NSObject, ObservableObject {
     private var syncBuffer = Data()
     /// Pieces waiting for the link to take more writes without response.
     private var outbox: [Data] = []
+    /// The summary is asked for once per connection by itself; after that on refresh and syncs.
+    private var summaryAsked = false
+    /// The last sample sync saved something, so the summary is out of date once workouts are done.
+    private var summaryStale = false
+    /// The running sample sync came from Sync now, so workouts shouldn't wait out a retry pause.
+    private var userAskedSync = false
+
+    /// The companion protocol the watch speaks (0 until its info has been read).
+    var protocolVersion: Int { info?.protocolVersion ?? 0 }
 
     override init() {
         super.init()
         health.send = { [weak self] message in self?.sendSync(message) }
         weather.send = { [weak self] message in self?.sendSync(message) }
         images.send = { [weak self] message in self?.sendSync(message) }
+        summary.send = { [weak self] message in self?.sendSync(message) }
+        workouts.send = { [weak self] message in self?.sendSync(message) }
+        health.onFinished = { [weak self] saved in self?.healthSyncFinished(saved: saved) }
+        workouts.onFinished = { [weak self] savedAny in self?.workoutSyncFinished(savedAny: savedAny) }
         central = CBCentralManager(
             delegate: self,
             queue: nil,
@@ -109,6 +140,7 @@ final class WatchLink: NSObject, ObservableObject {
         info = nil
         settings = nil
         watchName = nil
+        summaryAsked = false
         state = .choosing
         refreshCandidates()
     }
@@ -129,8 +161,11 @@ final class WatchLink: NSObject, ObservableObject {
         refreshCandidates()
     }
 
-    /// Pull what the watch has for Apple Health now (the app also does this on its own).
+    /// Pull what the watch has for Apple Health now (the app also does this on its own). Workouts
+    /// follow the samples on a watch with protocol 6.
     func syncHealth() {
+        if health.syncing { return }
+        userAskedSync = true
         health.start()
     }
 
@@ -139,6 +174,42 @@ final class WatchLink: NSObject, ObservableObject {
         guard state == .connected else { return }
         refreshSettings()
         if (info?.protocolVersion ?? 0) >= 4 { weather.updateIfNeeded() }
+        refreshSummary()
+    }
+
+    /// Ask the watch for its summary of the last week (protocol 6).
+    func refreshSummary() {
+        guard protocolVersion >= 6, syncCharacteristic?.isNotifying == true else { return }
+        summaryAsked = true
+        summary.request(days: 7)
+    }
+
+    /// Change one field of the watch's body profile and goals (protocol 6). Shown right away; the
+    /// watch's reply confirms or corrects it.
+    func setProfile<Value>(_ keyPath: WritableKeyPath<WatchProfile, Value>, field: String, to value: Value) {
+        settings?.profile?[keyPath: keyPath] = value
+        settingsError = nil
+        sendSync(["op": "setSetting", "key": "profile.\(field)", "value": value])
+    }
+
+    /// Samples are in; workouts come next, then a fresh summary if anything new arrived.
+    private func healthSyncFinished(saved: Int?) {
+        let asked = userAskedSync
+        userAskedSync = false
+        guard protocolVersion >= 6, syncCharacteristic != nil else { return }
+        if (saved ?? 0) > 0 { summaryStale = true }
+        if saved != nil { workouts.start(automatic: !asked) }
+        if !workouts.syncing && summaryStale {
+            summaryStale = false
+            refreshSummary()
+        }
+    }
+
+    private func workoutSyncFinished(savedAny: Bool) {
+        if savedAny || summaryStale {
+            summaryStale = false
+            refreshSummary()
+        }
     }
 
     /// Ask the watch for its settings again.
@@ -167,6 +238,10 @@ final class WatchLink: NSObject, ObservableObject {
         switch envelope.op {
         case "batch":
             health.handle(data)
+        case "summary":
+            summary.handle(data)
+        case "workout":
+            workouts.handle(data)
         case "fetch":
             if let request = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 images.handle(request)
@@ -264,6 +339,9 @@ extension WatchLink: CBCentralManagerDelegate {
         syncBuffer.removeAll()
         outbox.removeAll()
         health.linkLost()
+        workouts.linkLost()
+        summary.linkLost()
+        summaryAsked = false
         state = .connecting
         central.connect(peripheral)
     }
@@ -277,6 +355,8 @@ extension WatchLink: CBPeripheralDelegate {
         if characteristic.uuid == Self.syncUUID && characteristic.isNotifying {
             sendSync(["op": "hello", "features": ["images"]])
             refreshSettings()
+            // If the info read came back first, the summary waited for this
+            if !summaryAsked { refreshSummary() }
         }
     }
 
@@ -320,9 +400,18 @@ extension WatchLink: CBPeripheralDelegate {
             info = decoded
             health.deviceModel = decoded.model
             health.watchAppVersion = decoded.app
-            // The watch announces waiting samples through info; fetch them while iOS lets us run
+            workouts.deviceModel = decoded.model
+            workouts.watchAppVersion = decoded.app
+            // The watch announces waiting samples through info; fetch them while iOS lets us run.
+            // Workouts follow the samples; on their own only when no samples are waiting.
             if (decoded.pending ?? 0) > 0 && syncCharacteristic != nil {
                 health.start()
+            } else if decoded.protocolVersion >= 6 && (decoded.workoutsPending ?? 0) > 0
+                        && syncCharacteristic != nil && !health.syncing {
+                workouts.start(automatic: true)
+            }
+            if decoded.protocolVersion >= 6 && !summaryAsked {
+                refreshSummary()
             }
             // Same for the weather: info tells how old the watch's forecast is
             if decoded.protocolVersion >= 4 && syncCharacteristic != nil {
