@@ -44,3 +44,10 @@ google-services.json
 *.swp
 *~
 test.txt
+
+# iOS (generated / build output)
+ios/WristLink.xcodeproj/
+ios/build/
+ios/Payload/
+ios/*.ipa
+ios/WristLink/Info.plist

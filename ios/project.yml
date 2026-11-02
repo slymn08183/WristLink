@@ -1,0 +1,46 @@
+# XcodeGen spec: the Xcode project is generated from this file (CI runs `xcodegen generate`),
+# so no .xcodeproj is checked in and the app can be built without opening Xcode.
+name: WristLink
+options:
+  bundleIdPrefix: io.github.slymn08183
+  deploymentTarget:
+    iOS: "17.0"
+targets:
+  WristLink:
+    type: application
+    platform: iOS
+    sources: [WristLink]
+    info:
+      path: WristLink/Info.plist
+      properties:
+        CFBundleDisplayName: WristLink
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UIRequiredDeviceCapabilities: [arm64]
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        # Keeps the link to the watch alive in the background; iOS wakes the app when data arrives
+        UIBackgroundModes: [bluetooth-central]
+        NSBluetoothAlwaysUsageDescription: WristLink talks to your Galaxy Watch over Bluetooth.
+        NSHealthShareUsageDescription: WristLink checks what is already in Apple Health so it doesn't write anything twice.
+        NSHealthUpdateUsageDescription: WristLink saves steps, heart rate, workouts and sleep from your watch to Apple Health.
+    entitlements:
+      path: WristLink/WristLink.entitlements
+      properties:
+        com.apple.developer.healthkit: true
+        com.apple.developer.healthkit.access: []
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.slymn08183.wristlink
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        # Built unsigned in CI; AltStore/SideStore signs it with the user's own Apple ID on install
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGNING_ALLOWED: NO
+schemes:
+  WristLink:
+    build:
+      targets:
+        WristLink: all

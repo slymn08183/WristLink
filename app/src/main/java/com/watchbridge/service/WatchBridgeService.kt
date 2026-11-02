@@ -15,6 +15,7 @@ import androidx.core.app.NotificationCompat
 import com.watchbridge.MainActivity
 import com.watchbridge.R
 import com.watchbridge.WatchBridgeApp
+import com.watchbridge.companion.CompanionGattServer
 import com.watchbridge.diagnostics.LinkStats
 import com.watchbridge.ams.AmsMediaManager
 import com.watchbridge.ams.MediaSessionBridge
@@ -74,6 +75,7 @@ class WatchBridgeService : Service() {
         var connectionManager: BleConnectionManager? = null
             private set
         var advertiser: BleAdvertiser? = null
+        var companionServer: CompanionGattServer? = null
             private set
         var sessionManager: AncsSessionManager? = null
             private set
@@ -192,6 +194,7 @@ class WatchBridgeService : Service() {
         advertiser = adv
 
         bondMgr.register()
+        companionServer = CompanionGattServer(this).also { it.start() }
 
         val receiver = NotificationActionReceiver()
         registerReceiver(
@@ -335,6 +338,8 @@ class WatchBridgeService : Service() {
     }
 
     override fun onDestroy() {
+        companionServer?.stop()
+        companionServer = null
         Log.i(TAG, "Service destroyed")
 
         advertiser?.close()
