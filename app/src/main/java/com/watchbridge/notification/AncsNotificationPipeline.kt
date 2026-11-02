@@ -166,10 +166,11 @@ class AncsNotificationPipeline(
         return true
     }
 
+    /** Any DND mode, including Samsung's (priority only) and the one the iPhone app turns on. */
     private fun isDndActive(): Boolean {
         val filter = notificationManager.currentInterruptionFilter
-        return filter == NotificationManager.INTERRUPTION_FILTER_NONE ||
-            filter == NotificationManager.INTERRUPTION_FILTER_ALARMS
+        return filter != NotificationManager.INTERRUPTION_FILTER_ALL &&
+            filter != NotificationManager.INTERRUPTION_FILTER_UNKNOWN
     }
 
     private fun requestAttributes(event: AncsNotificationEvent) {

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Partly cloudy at night. Line icon for the weather tile and complications; the system tints it. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M9.3,3.36A4.5,4.5 0,1 0,11.64,9.3A4,4 0,0 1,9.3,3.36z"
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <group
+        android:scaleX="0.8"
+        android:scaleY="0.8"
+        android:translateX="4.2"
+        android:translateY="5.5">
+        <path
+            android:pathData="M7,18h10.5a4,4 0,0 0,0.6,-7.96A6,6 0,0 0,6.3,10.1A4,4 0,0 0,7,18z"
+            android:fillColor="#00000000"
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="2.5"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+    </group>
+</vector>

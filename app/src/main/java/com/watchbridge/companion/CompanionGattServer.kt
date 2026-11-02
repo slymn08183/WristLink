@@ -1,6 +1,7 @@
 package com.watchbridge.companion
 
 import android.annotation.SuppressLint
+import android.app.NotificationManager
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCharacteristic
@@ -16,12 +17,17 @@ import android.content.IntentFilter
 import android.os.BatteryManager
 import android.os.Build
 import android.util.Log
+import androidx.core.content.ContextCompat
 import com.watchbridge.diagnostics.LinkStats
 import com.watchbridge.health.HealthCollector
 import com.watchbridge.health.HealthStore
+import com.watchbridge.settings.SettingsManager
+import com.watchbridge.weather.WeatherStore
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -39,7 +45,10 @@ import java.util.concurrent.Executors
  * - [SYNC_UUID] (write, notify): newline-terminated JSON messages. The iPhone writes
  *   `{"op":"pull","after":ID,"max":N}` and gets `{"op":"batch","items":[...],"more":B}` back,
  *   split into notifications that fit the MTU; once the samples are in Apple Health it writes
- *   `{"op":"ack","upTo":ID}` and the watch drops them.
+ *   `{"op":"ack","upTo":ID}` and the watch drops them. Settings go both ways (`getSettings`,
+ *   `setSetting`, and `settings` pushed whenever they change on the watch), and the iPhone sends
+ *   the forecast (`weather`, see WeatherStore). Writes from the iPhone are newline-framed too and
+ *   may arrive in several pieces.
  *
  * To keep the iPhone (and both batteries) mostly asleep, the info notification announcing new
  * samples goes out at most every [PENDING_NOTIFY_INTERVAL_MS], or sooner when many are waiting.
@@ -49,7 +58,7 @@ class CompanionGattServer(private val context: Context) {
 
     companion object {
         private const val TAG = "CompanionGatt"
-        const val PROTOCOL_VERSION = 3
+        const val PROTOCOL_VERSION = 4
 
         val SERVICE_UUID: UUID = UUID.fromString("57a1e1c0-0001-4b8e-9a1f-6f4b10000000")
         val INFO_UUID: UUID = UUID.fromString("57a1e1c0-0002-4b8e-9a1f-6f4b10000000")
@@ -61,6 +70,10 @@ class CompanionGattServer(private val context: Context) {
         private const val MAX_BATCH = 100
         private const val PENDING_NOTIFY_INTERVAL_MS = 15 * 60 * 1000L
         private const val PENDING_NOTIFY_THRESHOLD = 300
+        /** Several changes in a row (a slider, quiet mode flipping DND and wake) go out as one. */
+        private const val SETTINGS_PUSH_DELAY_MS = 400L
+        private const val MAX_INBOX_BYTES = 16 * 1024
+        private const val NEWLINE = '\n'.code.toByte()
     }
 
     private val bluetoothManager = context.getSystemService(BluetoothManager::class.java)
@@ -83,6 +96,8 @@ class CompanionGattServer(private val context: Context) {
 
     private val subscribers = mutableMapOf<UUID, MutableSet<BluetoothDevice>>()
     private val mtus = mutableMapOf<BluetoothDevice, Int>()
+    /** Bytes written by each iPhone that don't end in a newline yet. */
+    private val inbox = mutableMapOf<BluetoothDevice, ByteArray>()
 
     /** Notifications go out one at a time: the next waits for onNotificationSent. */
     private val outbox = ArrayDeque<Triple<BluetoothDevice, BluetoothGattCharacteristic, ByteArray>>()
@@ -90,6 +105,16 @@ class CompanionGattServer(private val context: Context) {
 
     private var lastBattery = -1
     private var lastPendingNotifyMs = 0L
+
+    private var settingsWatcher: Job? = null
+    private var settingsPush: Job? = null
+    /** What was last sent, so a push that changes nothing stays off the air. */
+    private var lastSettingsSent: String? = null
+
+    /** Do Not Disturb changed on the watch itself (quick panel, schedules, bedtime mode). */
+    private val dndReceiver = object : BroadcastReceiver() {
+        override fun onReceive(ctx: Context, intent: Intent) = onSettingsChanged()
+    }
 
     private val batteryReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context, intent: Intent) {
@@ -106,6 +131,7 @@ class CompanionGattServer(private val context: Context) {
             if (newState == BluetoothGatt.STATE_DISCONNECTED) scope.launch {
                 subscribers.values.forEach { it.remove(device) }
                 mtus.remove(device)
+                inbox.remove(device)
                 outbox.removeAll { it.first == device }
             }
         }
@@ -139,7 +165,7 @@ class CompanionGattServer(private val context: Context) {
                     offset, null
                 )
             }
-            if (ok) scope.launch { handleSyncRequest(device, value!!.toString(Charsets.UTF_8)) }
+            if (ok) scope.launch { receive(device, value!!) }
         }
 
         override fun onDescriptorWriteRequest(
@@ -178,11 +204,18 @@ class CompanionGattServer(private val context: Context) {
         s.addService(service)
         server = s
         context.registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        ContextCompat.registerReceiver(
+            context, dndReceiver, IntentFilter(NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED),
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+        settingsWatcher = scope.launch { SettingsManager.get(context).changes.collect { onSettingsChanged() } }
         Log.i(TAG, "Companion service up (protocol $PROTOCOL_VERSION)")
     }
 
     fun stop() {
         runCatching { context.unregisterReceiver(batteryReceiver) }
+        runCatching { context.unregisterReceiver(dndReceiver) }
+        settingsWatcher?.cancel()
         server?.close()
         server = null
     }
@@ -206,6 +239,42 @@ class CompanionGattServer(private val context: Context) {
                 notifyInfo()
             }
         }
+    }
+
+    /** A setting changed on the watch (or quiet mode flipped some): tell the iPhone app. */
+    fun onSettingsChanged() {
+        scope.launch {
+            settingsPush?.cancel()
+            settingsPush = scope.launch {
+                delay(SETTINGS_PUSH_DELAY_MS)
+                val devices = subscribers[SYNC_UUID].orEmpty()
+                if (devices.isEmpty()) return@launch
+                val values = RemoteSettings.snapshot(context)
+                if (values.toString() == lastSettingsSent) return@launch
+                devices.forEach { sendSettings(it, error = null, values = values) }
+            }
+        }
+    }
+
+    /** Collect a write and handle every complete line in it. */
+    private fun receive(device: BluetoothDevice, value: ByteArray) {
+        var buffer = (inbox[device] ?: ByteArray(0)) + value
+        while (true) {
+            val newline = buffer.indexOf(NEWLINE)
+            if (newline < 0) break
+            val line = buffer.copyOfRange(0, newline).toString(Charsets.UTF_8)
+            buffer = buffer.copyOfRange(newline + 1, buffer.size)
+            if (line.isNotBlank()) handleSyncRequest(device, line)
+        }
+        // iPhone apps before protocol 4 send each request as one write with no newline
+        if (buffer.isNotEmpty() && buffer[0] == '{'.code.toByte()) {
+            val text = buffer.toString(Charsets.UTF_8)
+            if (runCatching { JSONObject(text) }.isSuccess) {
+                handleSyncRequest(device, text)
+                buffer = ByteArray(0)
+            }
+        }
+        inbox[device] = if (buffer.size > MAX_INBOX_BYTES) ByteArray(0) else buffer
     }
 
     private fun handleSyncRequest(device: BluetoothDevice, text: String) {
@@ -236,11 +305,20 @@ class CompanionGattServer(private val context: Context) {
                 Log.i(TAG, "setSetting $key=$value ${error ?: "ok"}")
                 sendSettings(device, error)
             }
+            "weather" -> {
+                WeatherStore.save(context, request)
+                notifyInfo()
+            }
         }
     }
 
-    private fun sendSettings(device: BluetoothDevice, error: String?) {
-        val reply = JSONObject().put("op", "settings").put("values", RemoteSettings.snapshot(context))
+    private fun sendSettings(
+        device: BluetoothDevice,
+        error: String?,
+        values: JSONObject = RemoteSettings.snapshot(context)
+    ) {
+        lastSettingsSent = values.toString()
+        val reply = JSONObject().put("op", "settings").put("values", values)
         if (error != null) reply.put("error", error)
         sendMessage(device, reply)
     }
@@ -308,6 +386,8 @@ class CompanionGattServer(private val context: Context) {
             .put("notifications", stats.notifications)
             .put("pending", store.pendingCount())
             .put("sleepSupported", HealthCollector.platformSleepSupported.value)
+            // When the forecast on the watch was fetched (s), so the iPhone knows when to send a new one
+            .put("weatherAt", WeatherStore.fetchedAtSeconds(context))
             .toString()
             .toByteArray(Charsets.UTF_8)
     }

@@ -25,7 +25,7 @@ class BootReceiver : BroadcastReceiver() {
             intent.action != Intent.ACTION_MY_PACKAGE_REPLACED
         ) return
 
-        if (!SettingsManager(context).isOnboardingComplete) return
+        if (!SettingsManager.get(context).isOnboardingComplete) return
         if (BondManager(context).getSavedBondedAddress() == null) {
             Log.i(TAG, "No paired iPhone yet, not starting the bridge")
             return

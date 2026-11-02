@@ -57,7 +57,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         bleScanner = BleScanner(this)
-        localSettings = SettingsManager(this)
+        localSettings = SettingsManager.get(this)
 
         checkPermissions()
 

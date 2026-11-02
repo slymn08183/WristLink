@@ -34,7 +34,7 @@ object WatchCalls {
     }
 
     fun isEnabled(context: Context): Boolean =
-        SettingsManager(context).isCallsOnWatchEnabled && hasPermissions(context)
+        SettingsManager.get(context).isCallsOnWatchEnabled && hasPermissions(context)
 
     /** The watch's own phone app is ringing: a hands-free call coming from the phone. */
     @SuppressLint("MissingPermission")

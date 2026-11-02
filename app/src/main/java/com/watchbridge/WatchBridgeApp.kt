@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import com.watchbridge.notification.NotificationChannels
 import com.watchbridge.health.HealthCollector
+import com.watchbridge.service.WatchBridgeService
 import com.watchbridge.settings.SettingsManager
 import com.watchbridge.sleep.SleepGuard
 
@@ -21,10 +22,14 @@ class WatchBridgeApp : Application() {
     override fun onCreate() {
         super.onCreate()
         createServiceChannel()
-        NotificationChannels.createAll(this, vibrate = SettingsManager(this).isVibrationEnabled)
-        HealthCollector.onSleepStateChanged = { asleep -> SleepGuard.onPlatformSleepState(this, asleep) }
+        NotificationChannels.createAll(this, vibrate = SettingsManager.get(this).isVibrationEnabled)
+        HealthCollector.onSleepStateChanged = { asleep ->
+            SleepGuard.onPlatformSleepState(this, asleep)
+            WatchBridgeService.companionServer?.onSettingsChanged()
+        }
+        SleepGuard.onStateChanged = { WatchBridgeService.companionServer?.onSettingsChanged() }
         HealthCollector.register(this)
-        SleepGuard.schedule(this)
+        SleepGuard.start(this)
     }
 
     private fun createServiceChannel() {

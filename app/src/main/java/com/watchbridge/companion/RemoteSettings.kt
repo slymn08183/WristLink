@@ -6,8 +6,8 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.provider.Settings
 import androidx.core.content.ContextCompat
-import com.watchbridge.ancs.AncsConstants
-import com.watchbridge.service.WatchBridgeService
+import com.watchbridge.call.WatchCalls
+import com.watchbridge.health.HealthCollector
 import com.watchbridge.settings.SettingsManager
 import com.watchbridge.sleep.SleepGuard
 import org.json.JSONArray
@@ -26,22 +26,7 @@ object RemoteSettings {
     private const val STATUS_ICONS = "home_status_indicator_display_config"
     private const val WAKE_GESTURE = "wake_gesture_enabled"
 
-    private val categories = listOf(
-        AncsConstants.CATEGORY_INCOMING_CALL to "Incoming calls",
-        AncsConstants.CATEGORY_MISSED_CALL to "Missed calls",
-        AncsConstants.CATEGORY_VOICEMAIL to "Voicemail",
-        AncsConstants.CATEGORY_SOCIAL to "Social",
-        AncsConstants.CATEGORY_SCHEDULE to "Schedule",
-        AncsConstants.CATEGORY_EMAIL to "Email",
-        AncsConstants.CATEGORY_NEWS to "News",
-        AncsConstants.CATEGORY_HEALTH_AND_FITNESS to "Health & Fitness",
-        AncsConstants.CATEGORY_BUSINESS_AND_FINANCE to "Business & Finance",
-        AncsConstants.CATEGORY_LOCATION to "Location",
-        AncsConstants.CATEGORY_ENTERTAINMENT to "Entertainment",
-        AncsConstants.CATEGORY_OTHER to "Other"
-    )
-
-    private fun settings(context: Context) = WatchBridgeService.settingsManager ?: SettingsManager(context)
+    private fun settings(context: Context) = SettingsManager.get(context)
 
     fun snapshot(context: Context): JSONObject {
         val s = settings(context)
@@ -55,14 +40,20 @@ object RemoteSettings {
             .put("respectDnd", s.respectDnd.value)
             .put("showPreExisting", s.showPreExisting.value)
             .put("showSilent", s.showSilent.value)
-            .put("callsOnWatch", s.callsOnWatch.value)
+            // Only really on once the watch has the phone permissions (asked on the watch)
+            .put("callsOnWatch", s.callsOnWatch.value && WatchCalls.hasPermissions(context))
+            .put("canTalkOnWatch", WatchCalls.hasPermissions(context))
             .put("phoneBatteryAlert", s.phoneBatteryAlert.value)
             .put("statusNotification", s.statusNotification.value)
             .put("sleepGuard", s.sleepGuard.value)
             .put("disconnectAlert", s.disconnectAlert.value)
             .put("showPhoneInfo", s.showPhoneInfo.value)
-            .put("asleep", SleepGuard.isAsleep(context))
-            .put("categories", JSONArray(categories.map { (id, name) ->
+            // Sleep as the watch sees it, and whether quiet mode is on because of it
+            .put("asleep", if (SleepGuard.usesWatchSleepDetection) HealthCollector.isAsleepNow(context) else SleepGuard.isAsleep(context))
+            .put("quietNow", SleepGuard.isAsleep(context))
+            .put("sleepDetection", if (SleepGuard.usesWatchSleepDetection) "watch" else "steps")
+            .put("sleepGuardReady", SleepGuard.hasControl(context))
+            .put("categories", JSONArray(SettingsManager.CATEGORIES.map { (id, name) ->
                 JSONObject().put("id", id.toInt()).put("name", name).put("enabled", filters[id] ?: true)
             }))
             // System
@@ -101,7 +92,12 @@ object RemoteSettings {
             key == "respectDnd" -> s.setRespectDnd(on)
             key == "showPreExisting" -> s.setShowPreExisting(on)
             key == "showSilent" -> s.setShowSilent(on)
-            key == "callsOnWatch" -> s.setCallsOnWatch(on)
+            key == "callsOnWatch" -> {
+                if (on && !WatchCalls.hasPermissions(context)) {
+                    return "Allow phone access on the watch first: WristLink, Settings, Calls on watch"
+                }
+                s.setCallsOnWatch(on)
+            }
             key == "phoneBatteryAlert" -> s.setPhoneBatteryAlert(on)
             key == "statusNotification" -> s.setStatusNotification(on)
             key == "disconnectAlert" -> s.setDisconnectAlert(on)

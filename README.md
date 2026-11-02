@@ -22,8 +22,9 @@ other wearables do, and adds an iPhone companion app for what iOS doesn't share 
 | Camera shutter for the iPhone camera | No |
 | iPhone battery level on the watch | No |
 | Connection stats: notification delay, uptime, drops (Settings → Connection stats) | No |
-| Quiet while asleep: Do Not Disturb and no raise-to-wake at night | No |
-| Watch battery and stats on the iPhone | Yes |
+| Quiet while asleep: Do Not Disturb and no raise-to-wake while the watch sees you sleep | No |
+| Watch battery and stats on the iPhone, and every WristLink setting | Yes |
+| Weather and sunrise/sunset: a tile, and complications for any watch face that takes them | Yes |
 | Apple Health sync (steps, heart rate, sleep, ...) | Yes, [in progress](#roadmap) |
 
 Not possible on iPhone for any third-party watch: replying to messages, call history, Apple Pay.
@@ -70,14 +71,16 @@ No Mac needed: it is built on GitHub and installed with AltStore. See [ios/READM
 ## Battery
 
 WristLink itself used **0.2%** of the watch's overnight drain in a measured night (batterystats).
-The link to the iPhone runs at a low-power Bluetooth interval (120 ms) and sleep detection reads
-the step counter every 10 minutes. On a Galaxy Watch most overnight drain comes from Samsung
+The link to the iPhone runs at a low-power Bluetooth interval (120 ms). Sleep comes from the
+watch's own detection, so nothing is polled (watches without it fall back to reading the step
+counter every 10 minutes at night). Weather tiles and complications get a whole timeline of hours
+and sunrise/sunset at once and don't wake the watch to update. On a Galaxy Watch most overnight drain comes from Samsung
 Health's sleep measurements (blood oxygen especially), Bluetooth and the screen.
 
 ## Roadmap
 
-- **iPhone app:** Apple Health sync, watch info and settings from the iPhone, album art, app icons
-  and weather fetched by the iPhone so the watch needs no Wi-Fi, ring phone / ring watch.
+- **iPhone app:** Apple Health sync, album art, app icons fetched by the iPhone so the watch needs
+  no Wi-Fi, ring phone / ring watch.
 - **Sleep:** better detection, sleep sessions to Apple Health.
 - **Workouts:** record on the watch, Apple Health with route, Strava upload.
 - **Don't buzz while the iPhone is in use.**

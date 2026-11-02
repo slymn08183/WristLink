@@ -47,7 +47,7 @@ class MediaActivity : ComponentActivity() {
     /** Opened straight from the launcher, maybe before WatchBridge itself ever ran. */
     private fun startBridgeIfNeeded() {
         if (WatchBridgeService.isRunning) return
-        if (!SettingsManager(this).isOnboardingComplete) return
+        if (!SettingsManager.get(this).isOnboardingComplete) return
         if (BondManager(this).getSavedBondedAddress() == null) return
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
             != PackageManager.PERMISSION_GRANTED

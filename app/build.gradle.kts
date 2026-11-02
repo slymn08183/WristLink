@@ -102,5 +102,8 @@ dependencies {
     // Health Services: passive steps, heart rate, calories, sleep state
     implementation(libs.health.services.client)
 
+    // Weather and sunrise/sunset complications
+    implementation(libs.wear.complications.data.source.ktx)
+
     testImplementation(libs.junit)
 }

@@ -1,6 +1,7 @@
 import Charts
 import CoreBluetooth
 import SwiftUI
+import UIKit
 
 /// Three tabs: the watch at a glance, Apple Health, and the watch's settings.
 struct ContentView: View {
@@ -106,6 +107,7 @@ private struct WatchTab: View {
                 VStack(spacing: 16) {
                     if let info = link.info {
                         header(info)
+                        WeatherCard(weather: link.weather, watchSupportsWeather: info.protocolVersion >= 4)
                         todayGrid(info)
                         connectionCard(info)
                     } else {
@@ -121,6 +123,7 @@ private struct WatchTab: View {
             .navigationTitle(link.watchName ?? "Watch")
             .refreshable {
                 link.refreshSettings()
+                link.weather.updateIfNeeded(force: true)
                 await stats.refresh()
             }
             .task { await stats.refresh() }
@@ -200,6 +203,97 @@ private struct WatchTab: View {
 
     private func batteryColor(_ level: Int) -> Color {
         level <= 15 ? .red : level <= 30 ? .orange : .green
+    }
+}
+
+// MARK: - Weather
+
+/// The forecast the watch shows, or what's needed before it can get one.
+private struct WeatherCard: View {
+    @ObservedObject var weather: WeatherFeed
+    let watchSupportsWeather: Bool
+
+    var body: some View {
+        if weather.enabled {
+            Group {
+                if !watchSupportsWeather {
+                    prompt("Update WristLink on the watch to get the weather there.")
+                } else {
+                    switch weather.access {
+                    case .notAsked:
+                        prompt("Allow location so WristLink can send the weather for where you are.",
+                               button: "Allow location") { weather.requestAccess() }
+                    case .denied:
+                        prompt("Location is off for WristLink. Turn it on in Settings to send the weather.",
+                               button: "Open Settings") {
+                            if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                        }
+                    case .allowed:
+                        if let summary = weather.latest {
+                            forecast(summary)
+                        } else {
+                            prompt(weather.lastError ?? "Getting the forecast…")
+                        }
+                    }
+                }
+            }
+            .card()
+        }
+    }
+
+    private func forecast(_ s: WeatherFeed.Summary) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label(s.place ?? "Weather", systemImage: "location.fill")
+                .font(.subheadline.weight(.semibold))
+            HStack(spacing: 14) {
+                Image(systemName: Sky.symbol(s.code, isDay: s.isDay))
+                    .symbolRenderingMode(.multicolor)
+                    .font(.system(size: 42))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(Format.temperature(s.temperature))
+                        .font(.system(size: 38, weight: .semibold, design: .rounded))
+                    Text(summaryLine(s)).font(.subheadline).foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            HStack(spacing: 14) {
+                if let sunrise = s.sunrise {
+                    Label(sunrise.formatted(date: .omitted, time: .shortened), systemImage: "sunrise.fill")
+                }
+                if let sunset = s.sunset {
+                    Label(sunset.formatted(date: .omitted, time: .shortened), systemImage: "sunset.fill")
+                }
+                Spacer()
+                Text("Sent \(s.fetchedAt, format: .relative(presentation: .named))")
+            }
+            .font(.footnote).foregroundStyle(.secondary)
+            if let error = weather.lastError {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote).foregroundStyle(.orange)
+            }
+        }
+    }
+
+    /// "Partly cloudy · 21° / 12°"
+    private func summaryLine(_ s: WeatherFeed.Summary) -> String {
+        var parts = [Sky.label(s.code, isDay: s.isDay)]
+        if let high = s.high, let low = s.low {
+            parts.append("\(Format.temperature(high)) / \(Format.temperature(low))")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func prompt(_ text: String, button: String? = nil, action: @escaping () -> Void = {}) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Weather on the watch", systemImage: "cloud.sun.fill")
+                .font(.headline)
+                .symbolRenderingMode(.multicolor)
+            Text(text).font(.subheadline).foregroundStyle(.secondary)
+            if let button {
+                Button(action: action) { Text(button).frame(maxWidth: .infinity) }
+                    .buttonStyle(.borderedProminent)
+            }
+        }
     }
 }
 
@@ -368,11 +462,16 @@ private struct SettingsTab: View {
                 }
             }
 
+            // Names and descriptions match the watch's own settings screen
             Section {
-                toggle("Vibration", "iphone.radiowaves.left.and.right", \.vibration, "vibration", s)
-                toggle("Follow Do Not Disturb", "moon", \.respectDnd, "respectDnd", s)
-                toggle("Show older notifications", "clock.arrow.circlepath", \.showPreExisting, "showPreExisting", s)
-                toggle("Show silent notifications", "bell.slash", \.showSilent, "showSilent", s)
+                toggle("Vibration", "iphone.radiowaves.left.and.right", \.vibration, "vibration", s,
+                       detail: "For notifications. Calls always buzz")
+                toggle("Hide during DND", "moon", \.respectDnd, "respectDnd", s,
+                       detail: "While the watch is on Do Not Disturb, only calls show")
+                toggle("Show older notifications", "clock.arrow.circlepath", \.showPreExisting, "showPreExisting", s,
+                       detail: "Include ones from before connecting")
+                toggle("Show silent notifications", "bell.slash", \.showSilent, "showSilent", s,
+                       detail: "Ones iOS delivers without a sound")
                 NavigationLink {
                     CategoriesView()
                 } label: {
@@ -383,29 +482,37 @@ private struct SettingsTab: View {
             }
 
             Section {
-                toggle("Talk on the watch", "phone.fill", \.callsOnWatch, "callsOnWatch", s)
+                toggle("Calls on watch", "phone.fill", \.callsOnWatch, "callsOnWatch", s,
+                       detail: "Talk through the watch", enabled: s.canTalkOnWatch != false)
             } header: {
                 Text("Calls")
             } footer: {
-                Text("Call audio goes to the watch when it's connected as the iPhone's Bluetooth audio.")
+                Text(s.canTalkOnWatch == false
+                     ? "Allow phone access on the watch first: open WristLink there, Settings, Calls on watch."
+                     : "Call audio goes to the watch when it's connected as the iPhone's Bluetooth audio.")
             }
 
             Section {
-                toggle("Low battery alert", "battery.25", \.phoneBatteryAlert, "phoneBatteryAlert", s)
-                toggle("Disconnect alert", "iphone.slash", \.disconnectAlert, "disconnectAlert", s)
-                toggle("Phone info on tile", "rectangle.on.rectangle", \.showPhoneInfo, "showPhoneInfo", s)
+                toggle("Battery alert", "battery.25", \.phoneBatteryAlert, "phoneBatteryAlert", s,
+                       detail: "Buzz when the iPhone is below 20%")
+                toggle("Disconnect alert", "iphone.slash", \.disconnectAlert, "disconnectAlert", s,
+                       detail: "Buzz when the iPhone is gone for a minute")
+                toggle("Phone info on tile", "rectangle.on.rectangle", \.showPhoneInfo, "showPhoneInfo", s,
+                       detail: "Name and battery on the tile")
             } header: {
                 Text("iPhone")
             }
 
             Section {
-                toggle("Quiet while asleep", "bed.double", \.sleepGuard, "sleepGuard", s)
+                toggle("Quiet while asleep", "bed.double", \.sleepGuard, "sleepGuard", s,
+                       detail: "DND and no wrist wake while you sleep")
             } header: {
                 Text("Sleep")
             } footer: {
-                Text(s.asleep ? "Asleep now: Do Not Disturb is on and raising the wrist doesn't wake the screen."
-                              : "When the watch detects sleep it turns on Do Not Disturb and turns off raise to wake, and undoes both when you wake up.")
+                Text(sleepFooter(s))
             }
+
+            WeatherSection(weather: link.weather)
 
             Section {
                 toggle("Auto brightness", "sun.max", \.autoBrightness, "autoBrightness", s, enabled: s.canChangeSystem)
@@ -419,7 +526,7 @@ private struct SettingsTab: View {
                 }
                 Picker(selection: Binding(get: { s.fontScale },
                                           set: { link.set(\.fontScale, key: "fontScale", to: $0) })) {
-                    ForEach(Self.fontScales, id: \.self) { Text(Format.fontScale($0)).tag($0) }
+                    ForEach(Self.options(Self.fontScales, current: s.fontScale), id: \.self) { Text(Format.fontScale($0)).tag($0) }
                 } label: {
                     Label("Font size", systemImage: "textformat.size")
                 }
@@ -442,7 +549,7 @@ private struct SettingsTab: View {
                 toggle("Do Not Disturb", "moon.fill", \.doNotDisturb, "doNotDisturb", s, enabled: s.canChangeDnd)
                 Picker(selection: Binding(get: { s.screenTimeoutSec },
                                           set: { link.set(\.screenTimeoutSec, key: "screenTimeoutSec", to: $0) })) {
-                    ForEach(Self.timeouts, id: \.self) { Text(Format.timeout($0)).tag($0) }
+                    ForEach(Self.options(Self.timeouts, current: s.screenTimeoutSec), id: \.self) { Text(Format.timeout($0)).tag($0) }
                 } label: {
                     Label("Screen timeout", systemImage: "timer")
                 }
@@ -479,11 +586,56 @@ private struct SettingsTab: View {
     }
 
     private func toggle(_ title: String, _ icon: String, _ keyPath: WritableKeyPath<WatchSettings, Bool>,
-                        _ key: String, _ s: WatchSettings, enabled: Bool = true) -> some View {
+                        _ key: String, _ s: WatchSettings, detail: String? = nil, enabled: Bool = true) -> some View {
         Toggle(isOn: Binding(get: { s[keyPath: keyPath] }, set: { link.set(keyPath, key: key, to: $0) })) {
-            Label(title, systemImage: icon)
+            Label {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                    if let detail {
+                        Text(detail).font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+            } icon: {
+                Image(systemName: icon)
+            }
         }
         .disabled(!enabled)
+    }
+
+    /// The picker's choices, plus whatever the watch is set to now if it isn't one of them.
+    private static func options<T: Comparable & Hashable>(_ choices: [T], current: T) -> [T] {
+        choices.contains(current) ? choices : (choices + [current]).sorted()
+    }
+
+    private func sleepFooter(_ s: WatchSettings) -> String {
+        if s.sleepGuard && s.sleepGuardReady == false {
+            return "The watch can't change Do Not Disturb or raise to wake yet. Run the WristLink installer once."
+        }
+        if s.quietNow == true {
+            return "Quiet now: Do Not Disturb is on (alarms still ring) and raising the wrist doesn't wake the screen."
+        }
+        let when = s.sleepDetection == "steps"
+            ? "Between 22:00 and 10:00, once the watch has been still for a while,"
+            : "Whenever the watch detects that you're asleep, naps included,"
+        return "\(when) it turns on Do Not Disturb (alarms still ring) and turns off raise to wake, and undoes both when you wake up."
+    }
+}
+
+private struct WeatherSection: View {
+    @ObservedObject var weather: WeatherFeed
+
+    var body: some View {
+        Section {
+            Toggle(isOn: $weather.enabled) {
+                Label("Send weather to the watch", systemImage: "cloud.sun")
+            }
+        } header: {
+            Text("Weather")
+        } footer: {
+            Text("From Open-Meteo for where your iPhone is, about every 30 minutes while the watch is nearby. "
+                 + "To see it on the watch face, touch and hold the face, tap Customize, pick a spot and choose "
+                 + "WristLink's Weather or Sunrise & sunset. There is also a Weather tile.")
+        }
     }
 }
 
@@ -585,6 +737,10 @@ enum Format {
 
     static func delay(_ ms: Int) -> String {
         ms < 1000 ? "<1 s" : "\(Int((Double(ms) / 1000).rounded())) s"
+    }
+
+    static func temperature(_ value: Double) -> String {
+        "\(Int(value.rounded()))°"
     }
 
     static func timeout(_ seconds: Int) -> String {

@@ -34,7 +34,7 @@ import androidx.wear.compose.material.Text
 import androidx.wear.compose.material.ToggleChip
 import androidx.wear.compose.material.ToggleChipDefaults
 import com.watchbridge.R
-import com.watchbridge.ancs.AncsConstants
+import com.watchbridge.health.HealthCollector
 import com.watchbridge.diagnostics.LinkStats
 import com.watchbridge.notification.NotificationIcons
 import com.watchbridge.settings.SettingsManager
@@ -56,6 +56,7 @@ fun SettingsScreen(settings: SettingsManager, onOpenStats: () -> Unit) {
     val statusNotification by settings.statusNotification.collectAsState()
     val sleepGuard by settings.sleepGuard.collectAsState()
     val disconnectAlert by settings.disconnectAlert.collectAsState()
+    val watchDetectsSleep by HealthCollector.platformSleepSupported.collectAsState()
 
     val categoryFilters = settings.getAllCategoryFilters()
     val listState = rememberScalingLazyListState()
@@ -189,8 +190,8 @@ fun SettingsScreen(settings: SettingsManager, onOpenStats: () -> Unit) {
 
             item {
                 SettingsToggle(
-                    label = "Respect DND",
-                    secondaryLabel = "Silent when phone is on DND",
+                    label = "Hide during DND",
+                    secondaryLabel = "While the watch is on DND, only calls show",
                     checked = respectDnd,
                     onCheckedChange = { settings.setRespectDnd(it) }
                 )
@@ -257,9 +258,10 @@ fun SettingsScreen(settings: SettingsManager, onOpenStats: () -> Unit) {
                 SettingsToggle(
                     label = "Quiet while asleep",
                     secondaryLabel = when {
-                        !sleepGuard -> "DND and no wrist wake at night"
+                        !sleepGuard -> "DND and no wrist wake while you sleep"
                         !SleepGuard.hasControl(context) -> "Needs permissions via adb"
-                        SleepGuard.isAsleep(context) -> "On · you're asleep now"
+                        SleepGuard.isAsleep(context) -> "On · quiet now, you're asleep"
+                        watchDetectsSleep == true -> "On · when the watch sees you sleep"
                         else -> "On · 22:00–10:00 when still"
                     },
                     checked = sleepGuard,
@@ -291,22 +293,7 @@ fun SettingsScreen(settings: SettingsManager, onOpenStats: () -> Unit) {
             // Category filters header
             item { SectionHeader("CATEGORIES") }
 
-            val categories = listOf(
-                AncsConstants.CATEGORY_INCOMING_CALL to "Incoming Calls",
-                AncsConstants.CATEGORY_MISSED_CALL to "Missed Calls",
-                AncsConstants.CATEGORY_VOICEMAIL to "Voicemail",
-                AncsConstants.CATEGORY_SOCIAL to "Social",
-                AncsConstants.CATEGORY_SCHEDULE to "Schedule",
-                AncsConstants.CATEGORY_EMAIL to "Email",
-                AncsConstants.CATEGORY_NEWS to "News",
-                AncsConstants.CATEGORY_HEALTH_AND_FITNESS to "Health & Fitness",
-                AncsConstants.CATEGORY_BUSINESS_AND_FINANCE to "Business & Finance",
-                AncsConstants.CATEGORY_LOCATION to "Location",
-                AncsConstants.CATEGORY_ENTERTAINMENT to "Entertainment",
-                AncsConstants.CATEGORY_OTHER to "Other"
-            )
-
-            for ((catId, catName) in categories) {
+            for ((catId, catName) in SettingsManager.CATEGORIES) {
                 item {
                     CategoryToggle(
                         label = catName,

@@ -139,7 +139,7 @@ class WatchBridgeService : Service() {
         Log.i(TAG, "Service created")
 
         LinkStats.init(this)
-        val settings = SettingsManager(this)
+        val settings = SettingsManager.get(this)
         val connMgr = BleConnectionManager(this)
         val bondMgr = BondManager(this)
         val adv = BleAdvertiser(this)

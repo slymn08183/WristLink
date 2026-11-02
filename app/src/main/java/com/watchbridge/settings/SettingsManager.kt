@@ -5,14 +5,21 @@ import android.content.SharedPreferences
 import com.watchbridge.ancs.AncsConstants
 import com.watchbridge.notification.NotificationChannels
 import com.watchbridge.tile.ConnectionTileService
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Persisted app settings for notification filtering, vibration, and behavior.
+ *
+ * One instance per process ([get]), shared by the screens, the service and the iPhone link, so a
+ * change made in one place is seen everywhere at once.
  */
-class SettingsManager(context: Context) {
+class SettingsManager private constructor(context: Context) {
 
     companion object {
         private const val PREFS_NAME = "watchbridge_settings"
@@ -31,11 +38,46 @@ class SettingsManager(context: Context) {
         private const val KEY_DISCONNECT_ALERT = "disconnect_alert"
         private const val KEY_CALL_PERMISSIONS_ASKED = "call_permissions_asked"
         private const val KEY_CATEGORY_PREFIX = "category_enabled_"
+
+        /** iOS notification categories with the names both apps show, in display order. */
+        val CATEGORIES: List<Pair<Byte, String>> = listOf(
+            AncsConstants.CATEGORY_INCOMING_CALL to "Incoming calls",
+            AncsConstants.CATEGORY_MISSED_CALL to "Missed calls",
+            AncsConstants.CATEGORY_VOICEMAIL to "Voicemail",
+            AncsConstants.CATEGORY_SOCIAL to "Social",
+            AncsConstants.CATEGORY_SCHEDULE to "Schedule",
+            AncsConstants.CATEGORY_EMAIL to "Email",
+            AncsConstants.CATEGORY_NEWS to "News",
+            AncsConstants.CATEGORY_HEALTH_AND_FITNESS to "Health & Fitness",
+            AncsConstants.CATEGORY_BUSINESS_AND_FINANCE to "Business & Finance",
+            AncsConstants.CATEGORY_LOCATION to "Location",
+            AncsConstants.CATEGORY_ENTERTAINMENT to "Entertainment",
+            AncsConstants.CATEGORY_OTHER to "Other"
+        )
+
+        @Volatile private var instance: SettingsManager? = null
+
+        fun get(context: Context): SettingsManager =
+            instance ?: synchronized(this) {
+                instance ?: SettingsManager(context.applicationContext).also { instance = it }
+            }
     }
 
     private val appContext = context.applicationContext
     private val prefs: SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    private val _changes = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
+    /** Fires after any setting changes, wherever it was changed (the iPhone link pushes it on). */
+    val changes: SharedFlow<Unit> = _changes.asSharedFlow()
+
+    // Held here: SharedPreferences keeps only a weak reference to its listeners
+    private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> _changes.tryEmit(Unit) }
+
+    init {
+        prefs.registerOnSharedPreferenceChangeListener(prefsListener)
+    }
 
     // Observable state
     private val _vibrationEnabled = MutableStateFlow(prefs.getBoolean(KEY_VIBRATION_ENABLED, true))
@@ -190,21 +232,6 @@ class SettingsManager(context: Context) {
     /**
      * Get all category filter states as a map.
      */
-    fun getAllCategoryFilters(): Map<Byte, Boolean> {
-        val categories = listOf(
-            AncsConstants.CATEGORY_OTHER,
-            AncsConstants.CATEGORY_INCOMING_CALL,
-            AncsConstants.CATEGORY_MISSED_CALL,
-            AncsConstants.CATEGORY_VOICEMAIL,
-            AncsConstants.CATEGORY_SOCIAL,
-            AncsConstants.CATEGORY_SCHEDULE,
-            AncsConstants.CATEGORY_EMAIL,
-            AncsConstants.CATEGORY_NEWS,
-            AncsConstants.CATEGORY_HEALTH_AND_FITNESS,
-            AncsConstants.CATEGORY_BUSINESS_AND_FINANCE,
-            AncsConstants.CATEGORY_LOCATION,
-            AncsConstants.CATEGORY_ENTERTAINMENT
-        )
-        return categories.associateWith { isCategoryEnabled(it) }
-    }
+    fun getAllCategoryFilters(): Map<Byte, Boolean> =
+        CATEGORIES.associate { (id, _) -> id to isCategoryEnabled(id) }
 }

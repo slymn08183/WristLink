@@ -21,6 +21,8 @@ import com.watchbridge.settings.SettingsManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
@@ -32,8 +34,10 @@ import kotlin.coroutines.resume
  * raising the wrist no longer lights up the screen. Undone on waking.
  *
  * Where the watch detects sleep itself (Health Services `USER_ACTIVITY_ASLEEP`, e.g. Galaxy Watch4),
- * that decides: see [onPlatformSleepState]. Otherwise asleep means: inside the night window, and the
- * step counter barely moved since the last check; awake means a real burst of steps, or the window
+ * that alone decides, at any hour, naps included: see [onPlatformSleepState]. Nothing is polled then.
+ *
+ * Elsewhere a step-counter fallback runs: asleep means inside the night window and the step
+ * counter barely moved since the last check; awake means a real burst of steps, or the window
  * ending. Checks run on an inexact alarm every [CHECK_INTERVAL_MS]; reading the hardware step
  * counter costs next to nothing.
  *
@@ -57,7 +61,7 @@ object SleepGuard {
     private const val ASLEEP_MAX_STEPS = 15
     private const val AWAKE_MIN_STEPS = 60
 
-    /** Night window, local time. */
+    /** Night window for the step-counter fallback, local time. */
     private const val WINDOW_START_HOUR = 22
     private const val WINDOW_END_HOUR = 10
 
@@ -66,7 +70,15 @@ object SleepGuard {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
+    /** Called after quiet mode turns on or off (the iPhone link pushes the new state). */
+    @Volatile var onStateChanged: (() -> Unit)? = null
+
+    /** Quiet mode is on right now. */
     fun isAsleep(context: Context): Boolean = prefs(context).getBoolean(KEY_ASLEEP, false)
+
+    /** True when the watch's own sleep detection drives quiet mode, false for the step fallback. */
+    val usesWatchSleepDetection: Boolean
+        get() = HealthCollector.platformSleepSupported.value == true
 
     /** Can it actually turn on DND and turn off raise-to-wake? */
     fun hasControl(context: Context): Boolean =
@@ -74,13 +86,29 @@ object SleepGuard {
             ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_SECURE_SETTINGS) ==
             PackageManager.PERMISSION_GRANTED
 
+    /** Call once at app start. Schedules again once it's known whether the watch detects sleep. */
+    fun start(context: Context) {
+        val app = context.applicationContext
+        schedule(app)
+        scope.launch {
+            HealthCollector.platformSleepSupported.filterNotNull().distinctUntilChanged().collect { schedule(app) }
+        }
+    }
+
     /** Start (or keep) checking; call on app start and whenever the setting changes. */
     fun schedule(context: Context) {
         val alarms = context.getSystemService(AlarmManager::class.java)
         val pending = alarmIntent(context)
-        if (!SettingsManager(context).isSleepGuardEnabled) {
+        if (!SettingsManager.get(context).isSleepGuardEnabled) {
             alarms.cancel(pending)
             if (isAsleep(context)) scope.launch { wakeUp(context) }
+            return
+        }
+        if (usesWatchSleepDetection) {
+            // The watch says when sleep starts and ends; nothing to poll. Catch up with right now,
+            // e.g. turned on while already asleep.
+            alarms.cancel(pending)
+            onPlatformSleepState(context, HealthCollector.isAsleepNow(context))
             return
         }
         alarms.setInexactRepeating(
@@ -110,7 +138,7 @@ object SleepGuard {
      * the watch has it, this is what drives quiet mode; the step-counter check stays as a fallback.
      */
     fun onPlatformSleepState(context: Context, asleep: Boolean) {
-        if (!SettingsManager(context).isSleepGuardEnabled) return
+        if (!SettingsManager.get(context).isSleepGuardEnabled) return
         scope.launch {
             when {
                 asleep && !isAsleep(context) -> fallAsleep(context)
@@ -120,9 +148,9 @@ object SleepGuard {
     }
 
     private suspend fun evaluate(context: Context) {
-        if (HealthCollector.platformSleepSupported.value == true) {
-            // The watch reports sleep itself; only make sure quiet mode doesn't outlast the night
-            if (isAsleep(context) && !inNightWindow() && !HealthCollector.isAsleepNow(context)) wakeUp(context)
+        if (usesWatchSleepDetection) {
+            // A leftover alarm from the fallback: follow the watch's own state and stop polling
+            schedule(context)
             return
         }
         val prefs = prefs(context)
@@ -160,6 +188,7 @@ object SleepGuard {
 
         editor.apply()
         Log.i(TAG, "Asleep: quiet mode on")
+        onStateChanged?.invoke()
     }
 
     private fun wakeUp(context: Context) {
@@ -177,6 +206,7 @@ object SleepGuard {
 
         prefs.edit().putBoolean(KEY_ASLEEP, false).apply()
         Log.i(TAG, "Awake: quiet mode off")
+        onStateChanged?.invoke()
     }
 
     private fun inNightWindow(): Boolean {

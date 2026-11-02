@@ -26,6 +26,7 @@ targets:
         NSBluetoothAlwaysUsageDescription: WristLink talks to your Galaxy Watch over Bluetooth.
         NSHealthShareUsageDescription: WristLink checks what is already in Apple Health so it doesn't write anything twice.
         NSHealthUpdateUsageDescription: WristLink saves steps, heart rate, workouts and sleep from your watch to Apple Health.
+        NSLocationWhenInUseUsageDescription: WristLink gets the weather for where you are and sends it to your watch.
     entitlements:
       path: WristLink/WristLink.entitlements
       properties:

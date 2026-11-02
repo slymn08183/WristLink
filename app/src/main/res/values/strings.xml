@@ -20,4 +20,7 @@
     <string name="camera_app_name">Camera Remote</string>
     <string name="timer_app_name">Rest Timer</string>
     <string name="timer_tile_label">Rest Timer</string>
+    <string name="weather_tile_label">Weather</string>
+    <string name="weather_complication_label">Weather</string>
+    <string name="sun_complication_label">Sunrise &amp; sunset</string>
 </resources>

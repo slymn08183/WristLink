@@ -205,6 +205,57 @@
                 android:resource="@drawable/ic_launcher_media" />
         </service>
 
+        <!-- Weather from the iPhone: tile, and complications for any watch face -->
+        <service
+            android:name=".tile.WeatherTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_weather_partly_day"
+            android:label="@string/weather_tile_label"
+            android:permission="com.google.android.wearable.permission.BIND_TILE_PROVIDER">
+            <intent-filter>
+                <action android:name="androidx.wear.tiles.action.BIND_TILE_PROVIDER" />
+            </intent-filter>
+            <meta-data
+                android:name="androidx.wear.tiles.PREVIEW"
+                android:resource="@mipmap/ic_launcher" />
+        </service>
+
+        <!-- Complications hand the face a timeline, so they need no frequent updates; the period
+             only catches faces that ignore timelines -->
+        <service
+            android:name=".weather.WeatherComplicationService"
+            android:exported="true"
+            android:icon="@drawable/ic_weather_partly_day"
+            android:label="@string/weather_complication_label"
+            android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
+            <intent-filter>
+                <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
+            </intent-filter>
+            <meta-data
+                android:name="android.support.wearable.complications.SUPPORTED_TYPES"
+                android:value="SHORT_TEXT,LONG_TEXT" />
+            <meta-data
+                android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
+                android:value="1800" />
+        </service>
+
+        <service
+            android:name=".weather.SunComplicationService"
+            android:exported="true"
+            android:icon="@drawable/ic_sunrise"
+            android:label="@string/sun_complication_label"
+            android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
+            <intent-filter>
+                <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
+            </intent-filter>
+            <meta-data
+                android:name="android.support.wearable.complications.SUPPORTED_TYPES"
+                android:value="SHORT_TEXT,LONG_TEXT" />
+            <meta-data
+                android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
+                android:value="1800" />
+        </service>
+
         <!-- End-of-rest buzz, fired by AlarmManager so it survives doze and app death -->
         <receiver
             android:name=".timer.RestTimerAlarmReceiver"

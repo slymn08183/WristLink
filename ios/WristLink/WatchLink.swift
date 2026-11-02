@@ -15,11 +15,13 @@ struct WatchInfo: Decodable, Equatable {
     let model: String?
     let pending: Int?
     let sleepSupported: Bool?
+    // Protocol 4: when the watch's forecast was fetched (Unix seconds, 0 for none)
+    let weatherAt: Int64?
 
     enum CodingKeys: String, CodingKey {
         case protocolVersion = "protocol"
         case app, battery, charging, connectedPct, drops, medianDelayMs, notifications
-        case model, pending, sleepSupported
+        case model, pending, sleepSupported, weatherAt
     }
 }
 
@@ -61,6 +63,8 @@ final class WatchLink: NSObject, ObservableObject {
 
     /// Apple Health sync, fed by the sync characteristic.
     let health = HealthSync()
+    /// Forecasts for the watch's weather tile and complications.
+    let weather = WeatherFeed()
 
     private var central: CBCentralManager!
     private var watch: CBPeripheral?
@@ -71,6 +75,7 @@ final class WatchLink: NSObject, ObservableObject {
     override init() {
         super.init()
         health.send = { [weak self] message in self?.sendSync(message) }
+        weather.send = { [weak self] message in self?.sendSync(message) }
         central = CBCentralManager(
             delegate: self,
             queue: nil,
@@ -124,6 +129,13 @@ final class WatchLink: NSObject, ObservableObject {
         health.start()
     }
 
+    /// The app came to the front: settings may have changed on the watch meanwhile.
+    func appBecameActive() {
+        guard state == .connected else { return }
+        refreshSettings()
+        if (info?.protocolVersion ?? 0) >= 4 { weather.updateIfNeeded() }
+    }
+
     /// Ask the watch for its settings again.
     func refreshSettings() {
         sendSync(["op": "getSettings"])
@@ -161,10 +173,19 @@ final class WatchLink: NSObject, ObservableObject {
         }
     }
 
+    /// Newline-terminated JSON, in pieces that each fit one write (a forecast doesn't). The watch
+    /// joins them again; iOS sends queued writes in order.
     private func sendSync(_ message: [String: Any]) {
         guard let watch, let syncCharacteristic,
-              let data = try? JSONSerialization.data(withJSONObject: message) else { return }
-        watch.writeValue(data, for: syncCharacteristic, type: .withResponse)
+              var data = try? JSONSerialization.data(withJSONObject: message) else { return }
+        data.append(0x0A)
+        let size = max(20, watch.maximumWriteValueLength(for: .withoutResponse))
+        var offset = 0
+        while offset < data.count {
+            let end = min(offset + size, data.count)
+            watch.writeValue(data.subdata(in: offset..<end), for: syncCharacteristic, type: .withResponse)
+            offset = end
+        }
     }
 
     private func attach(_ peripheral: CBPeripheral) {
@@ -269,6 +290,10 @@ extension WatchLink: CBPeripheralDelegate {
             // The watch announces waiting samples through info; fetch them while iOS lets us run
             if (decoded.pending ?? 0) > 0 && syncCharacteristic != nil {
                 health.start()
+            }
+            // Same for the weather: info tells how old the watch's forecast is
+            if decoded.protocolVersion >= 4 && syncCharacteristic != nil {
+                weather.watchReported(weatherAt: decoded.weatherAt)
             }
         case Self.syncUUID:
             syncBuffer.append(data)

@@ -134,7 +134,7 @@ class ConnectionTileService : TileService() {
     @SuppressLint("MissingPermission")
     private fun phoneLine(): LayoutElementBuilders.LayoutElement {
         // Turned off in Settings: keep the line, empty, so the layout doesn't jump
-        if (!SettingsManager(this).isPhoneInfoShown) return caption(" ", COLOR_PRIMARY)
+        if (!SettingsManager.get(this).isPhoneInfoShown) return caption(" ", COLOR_PRIMARY)
 
         val connection = WatchBridgeService.connectionManager
         val battery = connection?.phoneBattery?.value ?: return caption(" ", COLOR_PRIMARY)
