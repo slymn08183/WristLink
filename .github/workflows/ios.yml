@@ -19,7 +19,8 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-15
+    # Intel runners: the arm64 macOS pool often has no capacity and jobs time out unstarted
+    runs-on: macos-15-intel
     steps:
       - name: Checkout
         uses: actions/checkout@v4
