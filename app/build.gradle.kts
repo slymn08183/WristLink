@@ -90,6 +90,8 @@ dependencies {
     // Media session + Ongoing Activity
     implementation(libs.androidx.media)
     implementation(libs.wear.ongoing)
+    // Ambient mode (AmbientLifecycleObserver) for the workout screens
+    implementation(libs.wear)
 
     // Nordic BLE
     implementation(libs.nordic.ble.ktx)
