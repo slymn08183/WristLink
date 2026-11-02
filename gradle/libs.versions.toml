@@ -53,6 +53,8 @@ androidx-media = { group = "androidx.media", name = "media", version.ref = "medi
 wear-ongoing = { group = "androidx.wear", name = "wear-ongoing", version.ref = "wearOngoing" }
 # Ambient mode for the workout app's live screens
 wear = { group = "androidx.wear", name = "wear", version.ref = "wear" }
+# androidx.wear:wear pulls in Fragment 1.2, too old for the ActivityResult APIs
+androidx-fragment = { group = "androidx.fragment", name = "fragment", version = "1.8.5" }
 
 # Testing
 junit = { group = "junit", name = "junit", version.ref = "junit" }

@@ -125,7 +125,10 @@ object HealthCollector {
 
         val steps = daily(HealthStore.STEPS, "steps",
             points.getData(DataType.STEPS_DAILY).map { it.getEndInstant(boot).toEpochMilli() to it.value.toDouble() })
-        daily(HealthStore.DISTANCE, "distance",
+        // A workout carries its own distance and energy to Apple Health; the passive stream
+        // leaves those out meanwhile so they aren't counted twice
+        val workingOut = HealthAlerts.workoutActive()
+        daily(HealthStore.DISTANCE, "distance", outbox = !workingOut, totals =
             points.getData(DataType.DISTANCE_DAILY).map { it.getEndInstant(boot).toEpochMilli() to it.value })
         daily(HealthStore.FLOORS, "floors",
             points.getData(DataType.FLOORS_DAILY).map { it.getEndInstant(boot).toEpochMilli() to it.value })
@@ -133,7 +136,7 @@ object HealthCollector {
         val calories = points.getData(DataType.CALORIES_DAILY).map { it.getEndInstant(boot).toEpochMilli() to it.value }
         daily(HealthStore.CALORIES, "calories", calories, outbox = false).forEach { (from, to, delta) ->
             val active = HealthMetrics.activePart(context, from, to, delta, dayTotal = calories.maxOf { it.second })
-            if (active > 0.5) store.add(HealthStore.ACTIVE_CALORIES, from, to, active)
+            if (active > 0.5 && !workingOut) store.add(HealthStore.ACTIVE_CALORIES, from, to, active)
         }
 
         val heartRates = points.getData(DataType.HEART_RATE_BPM)

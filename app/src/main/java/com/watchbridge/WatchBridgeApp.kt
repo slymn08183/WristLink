@@ -5,9 +5,11 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import com.watchbridge.notification.NotificationChannels
 import com.watchbridge.health.HealthCollector
+import com.watchbridge.health.HealthAlerts
 import com.watchbridge.service.WatchBridgeService
 import com.watchbridge.settings.SettingsManager
 import com.watchbridge.sleep.SleepGuard
+import com.watchbridge.workout.WorkoutState
 
 class WatchBridgeApp : Application() {
 
@@ -28,6 +30,8 @@ class WatchBridgeApp : Application() {
             WatchBridgeService.companionServer?.onSettingsChanged()
         }
         SleepGuard.onStateChanged = { WatchBridgeService.companionServer?.onSettingsChanged() }
+        // No move reminders or resting heart-rate alerts mid-workout
+        HealthAlerts.workoutActive = { WorkoutState.active.value }
         HealthCollector.register(this)
         SleepGuard.start(this)
     }

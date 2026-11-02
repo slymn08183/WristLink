@@ -92,6 +92,7 @@ dependencies {
     implementation(libs.wear.ongoing)
     // Ambient mode (AmbientLifecycleObserver) for the workout screens
     implementation(libs.wear)
+    implementation(libs.androidx.fragment)
 
     // Nordic BLE
     implementation(libs.nordic.ble.ktx)

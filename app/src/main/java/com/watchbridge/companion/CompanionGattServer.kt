@@ -28,6 +28,7 @@ import com.watchbridge.health.LiveHealth
 import com.watchbridge.health.HealthStore
 import com.watchbridge.settings.SettingsManager
 import com.watchbridge.weather.WeatherStore
+import com.watchbridge.workout.WorkoutSync
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -334,6 +335,15 @@ class CompanionGattServer(private val context: Context) {
                 val error = RemoteSettings.apply(context, key, value)
                 Log.i(TAG, "setSetting $key=$value ${error ?: "ok"}")
                 sendSettings(device, error)
+            }
+            "nextWorkout" -> {
+                val workout = HealthHistory.get(context).nextUnsyncedWorkout()
+                sendMessage(device, workout?.let { WorkoutSync.message(context, it) } ?: WorkoutSync.none())
+                Log.i(TAG, "Sent workout ${workout?.id ?: "none"}")
+            }
+            "workoutAck" -> {
+                HealthHistory.get(context).markWorkoutSynced(request.optLong("id"))
+                notifyInfo()
             }
             "summary" -> {
                 val days = request.optInt("days", 7).coerceIn(1, 14)
