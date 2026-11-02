@@ -47,6 +47,16 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build | tail -40
 
+      # An unsigned build carries no entitlements, and sideloading tools copy the entitlements
+      # they find in the app's existing signature when re-signing it. Without this ad-hoc
+      # signature the installed app has no HealthKit entitlement ("Missing entitlement").
+      - name: Ad-hoc sign with entitlements
+        working-directory: ios
+        run: |
+          APP=build/Build/Products/Release-iphoneos/WristLink.app
+          codesign --force --sign - --entitlements WristLink/WristLink.entitlements --timestamp=none "$APP"
+          codesign -d --entitlements - "$APP"
+
       - name: Package .ipa
         working-directory: ios
         run: |
