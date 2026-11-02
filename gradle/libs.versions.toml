@@ -14,6 +14,7 @@ protolayout = "1.2.1"
 concurrentFutures = "1.1.0"
 media = "1.7.0"
 wearOngoing = "1.0.0"
+wear = "1.3.0"
 junit = "4.13.2"
 healthServices = "1.0.0"
 complications = "1.2.1"
@@ -50,6 +51,8 @@ nordic-ble-common = { group = "no.nordicsemi.android", name = "ble-common", vers
 # Media session + Ongoing Activity (now playing on the watch face)
 androidx-media = { group = "androidx.media", name = "media", version.ref = "media" }
 wear-ongoing = { group = "androidx.wear", name = "wear-ongoing", version.ref = "wearOngoing" }
+# Ambient mode for the workout app's live screens
+wear = { group = "androidx.wear", name = "wear", version.ref = "wear" }
 
 # Testing
 junit = { group = "junit", name = "junit", version.ref = "junit" }

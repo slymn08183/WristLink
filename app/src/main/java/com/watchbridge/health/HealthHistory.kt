@@ -256,6 +256,11 @@ class HealthHistory private constructor(context: Context) :
     /** The oldest workout the iPhone hasn't confirmed yet. */
     fun nextUnsyncedWorkout(): Workout? = queryWorkouts("synced = 0", order = "id LIMIT 1").firstOrNull()
 
+    /** Replace a workout's summary JSON (the workout app adds the recovery heart rate a minute after the end). */
+    fun setWorkoutSummary(id: Long, summary: String) {
+        writableDatabase.update("workout", ContentValues().apply { put("summary", summary) }, "id = ?", arrayOf(id.toString()))
+    }
+
     fun markWorkoutSynced(id: Long) {
         writableDatabase.update("workout", ContentValues().apply { put("synced", 1) }, "id = ?", arrayOf(id.toString()))
     }

@@ -24,6 +24,9 @@
     <!-- Foreground service -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- Workouts keep recording (heart rate, GPS) with the workout app closed -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_HEALTH" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
@@ -126,6 +129,26 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Fifth launcher icon, "Workout": runs, rides and gym workouts with Health Services -->
+        <activity
+            android:name=".workout.WorkoutActivity"
+            android:exported="true"
+            android:icon="@drawable/ic_launcher_workout"
+            android:label="@string/workout_app_name"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.watchbridge.workout">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Owns the workout session so it survives the workout app closing -->
+        <service
+            android:name=".workout.WorkoutService"
+            android:exported="false"
+            android:foregroundServiceType="health|location" />
 
         <activity
             android:name=".ui.IncomingCallActivity"
