@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import no.nordicsemi.android.ble.BleManager
+import no.nordicsemi.android.ble.ConnectionPriorityRequest
 import java.util.UUID
 
 /**
@@ -367,6 +368,21 @@ class BleConnectionManager(
         setupAms()
         setupBattery()
         readDeviceName()
+        relaxConnectionInterval()
+    }
+
+    /**
+     * Setup is done, so trade the default interval (~30-50 ms) for a low-power one (~100-125 ms).
+     * The link sits idle almost all day; a notification costs at most one extra interval, and its
+     * content still arrives within a few connection events. The iPhone may adjust it again.
+     */
+    private fun relaxConnectionInterval() {
+        requestConnectionPriority(ConnectionPriorityRequest.CONNECTION_PRIORITY_LOW_POWER)
+            .with { _, interval, latency, timeout ->
+                Log.i(TAG, "Connection params: interval=${interval * 1.25} ms latency=$latency timeout=${timeout * 10} ms")
+            }
+            .fail { _, status -> Log.w(TAG, "Low-power connection priority not accepted: $status") }
+            .enqueue()
     }
 
     /** The phone's own name, a fallback for when the watch's Bluetooth has no name for it. */
