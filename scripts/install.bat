@@ -7,8 +7,8 @@ REM watchbridge-X.Y.Z.apk next to this script.
 setlocal EnableDelayedExpansion
 
 set "PACKAGE=com.watchbridge"
-set "REPO=Irwanripansyahh/watchbridge"
-set "RELEASES_URL=https://github.com/Irwanripansyahh/watchbridge/releases/latest"
+set "REPO=slymn08183/WristLink"
+set "RELEASES_URL=https://github.com/slymn08183/WristLink/releases/latest"
 set "SCRIPT_DIR=%~dp0"
 set "TMP_OUT=%TEMP%\watchbridge_install.txt"
 
@@ -225,6 +225,17 @@ REM Lets WatchBridge install its own updates later (Settings -^> Updates).
 REM Wear OS has no on-watch screen for this permission.
 adb -s !CONN_ADDR! shell appops set %PACKAGE% REQUEST_INSTALL_PACKAGES allow >nul 2>&1
 if not errorlevel 1 echo   [OK] Future updates can be installed from the watch itself
+
+REM Keeps the phone link alive in the background: exempt from battery optimization and doze.
+adb -s !CONN_ADDR! shell dumpsys deviceidle whitelist +%PACKAGE% >nul 2>&1
+adb -s !CONN_ADDR! shell cmd appops set %PACKAGE% RUN_ANY_IN_BACKGROUND allow >nul 2>&1
+if not errorlevel 1 echo   [OK] Exempt from battery optimization
+
+REM "Quiet while asleep": step counter, Do Not Disturb, and turning off raise-to-wake.
+adb -s !CONN_ADDR! shell pm grant %PACKAGE% android.permission.ACTIVITY_RECOGNITION >nul 2>&1
+adb -s !CONN_ADDR! shell cmd notification allow_dnd %PACKAGE% >nul 2>&1
+adb -s !CONN_ADDR! shell pm grant %PACKAGE% android.permission.WRITE_SECURE_SETTINGS >nul 2>&1
+if not errorlevel 1 echo   [OK] Sleep quiet mode can manage Do Not Disturb and raise-to-wake
 
 REM --- Step 6: Open and pair with the iPhone ----------------------------------
 

@@ -3,14 +3,14 @@
 #
 # Downloads the latest WatchBridge from GitHub Releases and installs it on the watch.
 # Run it straight from GitHub:
-#   bash <(curl -fsSL https://raw.githubusercontent.com/Irwanripansyahh/watchbridge/master/scripts/install.sh)
+#   bash <(curl -fsSL https://raw.githubusercontent.com/slymn08183/WristLink/master/scripts/install.sh)
 # or download it and run:  ./install.sh
 # To install a specific version instead, put its watchbridge-X.Y.Z.apk next to this script.
 
 set -uo pipefail
 
 PACKAGE="com.watchbridge"
-REPO="Irwanripansyahh/watchbridge"
+REPO="slymn08183/WristLink"
 RELEASES_URL="https://github.com/$REPO/releases/latest"
 TOTAL_STEPS=6
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -282,6 +282,18 @@ ok "WatchBridge is installed"
 # Wear OS has no on-watch screen for this permission.
 adb -s "$CONN_ADDR" shell appops set "$PACKAGE" REQUEST_INSTALL_PACKAGES allow >/dev/null 2>&1 \
   && ok "Future updates can be installed from the watch itself"
+
+# Keeps the phone link alive in the background: exempt from battery optimization and doze.
+adb -s "$CONN_ADDR" shell dumpsys deviceidle whitelist +"$PACKAGE" >/dev/null 2>&1
+adb -s "$CONN_ADDR" shell cmd appops set "$PACKAGE" RUN_ANY_IN_BACKGROUND allow >/dev/null 2>&1 \
+  && ok "Exempt from battery optimization"
+
+# "Quiet while asleep": step counter, Do Not Disturb, and turning off raise-to-wake.
+# None of these have an on-watch permission screen.
+adb -s "$CONN_ADDR" shell pm grant "$PACKAGE" android.permission.ACTIVITY_RECOGNITION >/dev/null 2>&1
+adb -s "$CONN_ADDR" shell cmd notification allow_dnd "$PACKAGE" >/dev/null 2>&1
+adb -s "$CONN_ADDR" shell pm grant "$PACKAGE" android.permission.WRITE_SECURE_SETTINGS >/dev/null 2>&1 \
+  && ok "Sleep quiet mode can manage Do Not Disturb and raise-to-wake"
 
 # --- Step 6: Open and pair with the iPhone ------------------------------------
 
