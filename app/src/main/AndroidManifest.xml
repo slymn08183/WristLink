@@ -53,6 +53,10 @@
     <uses-permission
         android:name="android.permission.WRITE_SECURE_SETTINGS"
         tools:ignore="ProtectedPermissions" />
+    <!-- Screen timeout and 24-hour time, changed from the iPhone app (appops, granted with adb) -->
+    <uses-permission
+        android:name="android.permission.WRITE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
 
     <!-- Declare BLE feature -->
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />

@@ -58,7 +58,9 @@ cmd appops set com.watchbridge RUN_ANY_IN_BACKGROUND allow
 cmd appops set com.watchbridge REQUEST_INSTALL_PACKAGES allow  # in-app updates
 pm grant com.watchbridge android.permission.ACTIVITY_RECOGNITION    # sleep detection
 cmd notification allow_dnd com.watchbridge                          # quiet while asleep
-pm grant com.watchbridge android.permission.WRITE_SECURE_SETTINGS   # raise-to-wake on/off
+pm grant com.watchbridge android.permission.WRITE_SECURE_SETTINGS   # watch settings from WristLink / iPhone
+cmd appops set com.watchbridge WRITE_SETTINGS allow
+pm grant com.watchbridge android.permission.BODY_SENSORS              # heart rate (Wear OS 6 also: health.READ_HEART_RATE)
 ```
 
 ### iPhone app (optional)

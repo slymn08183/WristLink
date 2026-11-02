@@ -49,7 +49,7 @@ class CompanionGattServer(private val context: Context) {
 
     companion object {
         private const val TAG = "CompanionGatt"
-        const val PROTOCOL_VERSION = 2
+        const val PROTOCOL_VERSION = 3
 
         val SERVICE_UUID: UUID = UUID.fromString("57a1e1c0-0001-4b8e-9a1f-6f4b10000000")
         val INFO_UUID: UUID = UUID.fromString("57a1e1c0-0002-4b8e-9a1f-6f4b10000000")
@@ -227,7 +227,21 @@ class CompanionGattServer(private val context: Context) {
                 lastPendingNotifyMs = System.currentTimeMillis()
                 notifyInfo()
             }
+            "getSettings" -> sendSettings(device, error = null)
+            "setSetting" -> {
+                val key = request.optString("key")
+                val value = request.opt("value")
+                val error = RemoteSettings.apply(context, key, value)
+                Log.i(TAG, "setSetting $key=$value ${error ?: "ok"}")
+                sendSettings(device, error)
+            }
         }
+    }
+
+    private fun sendSettings(device: BluetoothDevice, error: String?) {
+        val reply = JSONObject().put("op", "settings").put("values", RemoteSettings.snapshot(context))
+        if (error != null) reply.put("error", error)
+        sendMessage(device, reply)
     }
 
     /** One JSON message on the sync characteristic, newline-terminated, split to fit the MTU. */

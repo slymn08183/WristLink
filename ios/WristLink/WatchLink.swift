@@ -54,6 +54,10 @@ final class WatchLink: NSObject, ObservableObject {
     @Published private(set) var info: WatchInfo?
     @Published private(set) var candidates: [CBPeripheral] = []
     @Published private(set) var watchName: String?
+    /// The watch's settings, once it has sent them (watch app with protocol 3 or later).
+    @Published private(set) var settings: WatchSettings?
+    /// The watch refused the last change (usually a missing adb permission).
+    @Published var settingsError: String?
 
     /// Apple Health sync, fed by the sync characteristic.
     let health = HealthSync()
@@ -93,6 +97,7 @@ final class WatchLink: NSObject, ObservableObject {
         UserDefaults.standard.removeObject(forKey: Self.savedWatchKey)
         watch = nil
         info = nil
+        settings = nil
         watchName = nil
         state = .choosing
         refreshCandidates()
@@ -117,6 +122,43 @@ final class WatchLink: NSObject, ObservableObject {
     /// Pull what the watch has for Apple Health now (the app also does this on its own).
     func syncHealth() {
         health.start()
+    }
+
+    /// Ask the watch for its settings again.
+    func refreshSettings() {
+        sendSync(["op": "getSettings"])
+    }
+
+    /// Change one watch setting. Shown right away; the watch's reply confirms or corrects it.
+    func set<Value>(_ keyPath: WritableKeyPath<WatchSettings, Value>, key: String, to value: Value) {
+        settings?[keyPath: keyPath] = value
+        settingsError = nil
+        sendSync(["op": "setSetting", "key": key, "value": value])
+    }
+
+    func setCategory(_ id: Int, enabled: Bool) {
+        if let index = settings?.categories.firstIndex(where: { $0.id == id }) {
+            settings?.categories[index].enabled = enabled
+        }
+        sendSync(["op": "setSetting", "key": "category.\(id)", "value": enabled])
+    }
+
+    /// Route one complete message from the sync channel by its "op".
+    private func handleMessage(_ data: Data) {
+        struct Envelope: Decodable { let op: String; let error: String? }
+        guard let envelope = try? JSONDecoder().decode(Envelope.self, from: data) else { return }
+        switch envelope.op {
+        case "batch":
+            health.handle(data)
+        case "settings":
+            struct Reply: Decodable { let values: WatchSettings }
+            if let reply = try? JSONDecoder().decode(Reply.self, from: data) {
+                settings = reply.values
+            }
+            settingsError = envelope.error
+        default:
+            break
+        }
     }
 
     private func sendSync(_ message: [String: Any]) {
@@ -181,6 +223,13 @@ extension WatchLink: CBCentralManagerDelegate {
 
 extension WatchLink: CBPeripheralDelegate {
 
+    func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
+        // Replies to requests arrive as notifications, so ask for settings only once they are on
+        if characteristic.uuid == Self.syncUUID && characteristic.isNotifying {
+            refreshSettings()
+        }
+    }
+
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         guard let service = peripheral.services?.first(where: { $0.uuid == Self.serviceUUID }) else {
             state = .noCompanionService
@@ -226,7 +275,7 @@ extension WatchLink: CBPeripheralDelegate {
             while let newline = syncBuffer.firstIndex(of: 0x0A) {
                 let message = syncBuffer[syncBuffer.startIndex..<newline]
                 syncBuffer.removeSubrange(syncBuffer.startIndex...newline)
-                health.handle(Data(message))
+                handleMessage(Data(message))
             }
         default:
             break
