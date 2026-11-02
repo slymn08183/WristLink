@@ -57,6 +57,7 @@ class CompanionGattServer(private val context: Context) {
         private val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
         private const val DEFAULT_MTU = 23
+        private const val MAX_ATTRIBUTE_LENGTH = 512
         private const val MAX_BATCH = 100
         private const val PENDING_NOTIFY_INTERVAL_MS = 15 * 60 * 1000L
         private const val PENDING_NOTIFY_THRESHOLD = 300
@@ -247,7 +248,9 @@ class CompanionGattServer(private val context: Context) {
     /** One JSON message on the sync characteristic, newline-terminated, split to fit the MTU. */
     private fun sendMessage(device: BluetoothDevice, message: JSONObject) {
         val bytes = (message.toString() + "\n").toByteArray(Charsets.UTF_8)
-        val chunk = (mtus[device] ?: DEFAULT_MTU) - 3
+        // An attribute value is at most 512 bytes however large the MTU (iPhones offer 517+), and
+        // the stack throws on anything longer
+        val chunk = minOf((mtus[device] ?: DEFAULT_MTU) - 3, MAX_ATTRIBUTE_LENGTH)
         var offset = 0
         while (offset < bytes.size) {
             val end = minOf(offset + chunk, bytes.size)
@@ -266,14 +269,17 @@ class CompanionGattServer(private val context: Context) {
         val s = server ?: return
         val (device, characteristic, value) = outbox.removeFirstOrNull() ?: return
         sending = true
-        val queued = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            s.notifyCharacteristicChanged(device, characteristic, false, value) == BluetoothGatt.GATT_SUCCESS
-        } else {
-            @Suppress("DEPRECATION")
-            characteristic.value = value
-            @Suppress("DEPRECATION")
-            s.notifyCharacteristicChanged(device, characteristic, false)
-        }
+        // A throw here would take the whole bridge down with it, so treat it like a busy stack
+        val queued = runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                s.notifyCharacteristicChanged(device, characteristic, false, value) == BluetoothGatt.GATT_SUCCESS
+            } else {
+                @Suppress("DEPRECATION")
+                characteristic.value = value
+                @Suppress("DEPRECATION")
+                s.notifyCharacteristicChanged(device, characteristic, false)
+            }
+        }.onFailure { Log.w(TAG, "Notification to ${device.address} failed", it) }.getOrDefault(false)
         if (!queued) {
             // Busy or gone; drop this one and keep the queue moving
             sending = false
