@@ -5,6 +5,7 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.os.SystemClock
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
@@ -72,7 +73,8 @@ class MediaSessionBridge(private val context: Context, private val media: AmsMed
         session.setPlaybackToRemote(volumeProvider)
     }
 
-    fun update(state: AmsMediaManager.MediaState) {
+    /** [art] is the cover from AlbumArt, null while unknown. */
+    fun update(state: AmsMediaManager.MediaState, art: Bitmap? = null) {
         // Nothing to show until a track is loaded on the phone
         if (!state.available || !state.hasPlayer || state.title.isEmpty()) {
             hide()
@@ -83,8 +85,11 @@ class MediaSessionBridge(private val context: Context, private val media: AmsMed
             MediaMetadataCompat.Builder()
                 .putString(MediaMetadataCompat.METADATA_KEY_TITLE, state.title)
                 .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, state.artist)
+                .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, state.album)
                 .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, state.playerName)
                 .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, (state.durationSeconds * 1000).toLong())
+                // The watch's own media controls show it behind the buttons
+                .apply { if (art != null) putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, art) }
                 .build()
         )
         session.setPlaybackState(
@@ -107,10 +112,10 @@ class MediaSessionBridge(private val context: Context, private val media: AmsMed
         state.volume?.let { volumeProvider.currentVolume = (it * VOLUME_STEPS).roundToInt() }
         if (!session.isActive) session.isActive = true
 
-        val key = listOf(state.title, state.artist, state.playerName, state.isPlaying)
+        val key = listOf(state.title, state.artist, state.playerName, state.isPlaying, art?.generationId)
         if (key != notifiedKey) {
             notifiedKey = key
-            postNotification(state)
+            postNotification(state, art)
         }
     }
 
@@ -127,7 +132,7 @@ class MediaSessionBridge(private val context: Context, private val media: AmsMed
         }
     }
 
-    private fun postNotification(state: AmsMediaManager.MediaState) {
+    private fun postNotification(state: AmsMediaManager.MediaState, art: Bitmap?) {
         val open = openPlayer()
         val builder = NotificationCompat.Builder(context, WatchBridgeApp.MEDIA_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_music_note)
@@ -141,6 +146,7 @@ class MediaSessionBridge(private val context: Context, private val media: AmsMed
             .setOnlyAlertOnce(true)
             // Ongoing (and on the watch face) while playing; can be swiped away when paused
             .setOngoing(state.isPlaying)
+            .setLargeIcon(art)
             .addAction(R.drawable.ic_skip_previous, "Previous", action(ACTION_PREVIOUS))
             .addAction(
                 if (state.isPlaying) R.drawable.ic_pause else R.drawable.ic_play,

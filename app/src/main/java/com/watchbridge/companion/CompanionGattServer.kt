@@ -16,6 +16,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
 import android.os.Build
+import android.util.Base64
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.watchbridge.diagnostics.LinkStats
@@ -48,7 +49,9 @@ import java.util.concurrent.Executors
  *   `{"op":"ack","upTo":ID}` and the watch drops them. Settings go both ways (`getSettings`,
  *   `setSetting`, and `settings` pushed whenever they change on the watch), and the iPhone sends
  *   the forecast (`weather`, see WeatherStore). Writes from the iPhone are newline-framed too and
- *   may arrive in several pieces.
+ *   may arrive in several pieces, with or without response.
+ * - The iPhone app says what it can do with `{"op":"hello","features":[…]}`. One that has
+ *   "images" fetches app icons and album art for the watch (PhoneImages).
  *
  * To keep the iPhone (and both batteries) mostly asleep, the info notification announcing new
  * samples goes out at most every [PENDING_NOTIFY_INTERVAL_MS], or sooner when many are waiting.
@@ -58,7 +61,7 @@ class CompanionGattServer(private val context: Context) {
 
     companion object {
         private const val TAG = "CompanionGatt"
-        const val PROTOCOL_VERSION = 4
+        const val PROTOCOL_VERSION = 5
 
         val SERVICE_UUID: UUID = UUID.fromString("57a1e1c0-0001-4b8e-9a1f-6f4b10000000")
         val INFO_UUID: UUID = UUID.fromString("57a1e1c0-0002-4b8e-9a1f-6f4b10000000")
@@ -72,7 +75,8 @@ class CompanionGattServer(private val context: Context) {
         private const val PENDING_NOTIFY_THRESHOLD = 300
         /** Several changes in a row (a slider, quiet mode flipping DND and wake) go out as one. */
         private const val SETTINGS_PUSH_DELAY_MS = 400L
-        private const val MAX_INBOX_BYTES = 16 * 1024
+        /** Album art arrives as about 20 KB of base64. */
+        private const val MAX_INBOX_BYTES = 96 * 1024
         private const val NEWLINE = '\n'.code.toByte()
     }
 
@@ -90,12 +94,15 @@ class CompanionGattServer(private val context: Context) {
     )
     private val syncCharacteristic = notifiable(
         SYNC_UUID,
-        BluetoothGattCharacteristic.PROPERTY_WRITE,
+        // Without response too: images come as many writes, and iOS can send several per interval
+        BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE,
         BluetoothGattCharacteristic.PERMISSION_WRITE_ENCRYPTED
     )
 
     private val subscribers = mutableMapOf<UUID, MutableSet<BluetoothDevice>>()
     private val mtus = mutableMapOf<BluetoothDevice, Int>()
+    /** iPhone apps that said they fetch images for the watch. */
+    private val imageClients = mutableSetOf<BluetoothDevice>()
     /** Bytes written by each iPhone that don't end in a newline yet. */
     private val inbox = mutableMapOf<BluetoothDevice, ByteArray>()
 
@@ -132,6 +139,8 @@ class CompanionGattServer(private val context: Context) {
                 subscribers.values.forEach { it.remove(device) }
                 mtus.remove(device)
                 inbox.remove(device)
+                imageClients.remove(device)
+                updateImageRequester()
                 outbox.removeAll { it.first == device }
             }
         }
@@ -178,6 +187,7 @@ class CompanionGattServer(private val context: Context) {
                 scope.launch {
                     val set = subscribers.getOrPut(uuid) { mutableSetOf() }
                     if (enabled) set.add(device) else set.remove(device)
+                    if (uuid == SYNC_UUID) updateImageRequester()
                 }
                 Log.i(TAG, "${device.address} ${if (enabled) "subscribed to" else "unsubscribed from"} $uuid")
             }
@@ -256,6 +266,19 @@ class CompanionGattServer(private val context: Context) {
         }
     }
 
+    /** Point PhoneImages at an iPhone app that can fetch images, if one is listening. */
+    private fun updateImageRequester() {
+        val device = imageClients.firstOrNull { it in subscribers[SYNC_UUID].orEmpty() }
+        if (device == null) {
+            if (PhoneImages.requester != null) PhoneImages.onDisconnected()
+            return
+        }
+        PhoneImages.requester = { request ->
+            scope.launch { sendMessage(device, request) }
+            true
+        }
+    }
+
     /** Collect a write and handle every complete line in it. */
     private fun receive(device: BluetoothDevice, value: ByteArray) {
         var buffer = (inbox[device] ?: ByteArray(0)) + value
@@ -308,6 +331,25 @@ class CompanionGattServer(private val context: Context) {
             "weather" -> {
                 WeatherStore.save(context, request)
                 notifyInfo()
+            }
+            "hello" -> {
+                val features = request.optJSONArray("features")
+                val images = features != null && (0 until features.length()).any { features.optString(it) == "images" }
+                if (images) imageClients.add(device) else imageClients.remove(device)
+                Log.i(TAG, "${device.address} says hello, features=$features")
+                updateImageRequester()
+            }
+            "image" -> {
+                val kind = request.optString("kind")
+                val key = request.optString("key")
+                val data = request.optString("data")
+                val result = if (request.optBoolean("missing") || data.isEmpty()) {
+                    PhoneImages.Result.Missing
+                } else {
+                    runCatching { Base64.decode(data, Base64.DEFAULT) }.getOrNull()
+                        ?.let { PhoneImages.Result.Image(it) } ?: PhoneImages.Result.Missing
+                }
+                PhoneImages.onImage(kind, key, result)
             }
         }
     }

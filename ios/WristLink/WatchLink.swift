@@ -65,17 +65,22 @@ final class WatchLink: NSObject, ObservableObject {
     let health = HealthSync()
     /// Forecasts for the watch's weather tile and complications.
     let weather = WeatherFeed()
+    /// App icons and album art the watch asks for.
+    let images = ImageFetcher()
 
     private var central: CBCentralManager!
     private var watch: CBPeripheral?
     private var syncCharacteristic: CBCharacteristic?
     /// Sync messages are newline-terminated JSON split across notifications.
     private var syncBuffer = Data()
+    /// Pieces waiting for the link to take more writes without response.
+    private var outbox: [Data] = []
 
     override init() {
         super.init()
         health.send = { [weak self] message in self?.sendSync(message) }
         weather.send = { [weak self] message in self?.sendSync(message) }
+        images.send = { [weak self] message in self?.sendSync(message) }
         central = CBCentralManager(
             delegate: self,
             queue: nil,
@@ -162,6 +167,10 @@ final class WatchLink: NSObject, ObservableObject {
         switch envelope.op {
         case "batch":
             health.handle(data)
+        case "fetch":
+            if let request = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                images.handle(request)
+            }
         case "settings":
             struct Reply: Decodable { let values: WatchSettings }
             if let reply = try? JSONDecoder().decode(Reply.self, from: data) {
@@ -173,18 +182,35 @@ final class WatchLink: NSObject, ObservableObject {
         }
     }
 
-    /// Newline-terminated JSON, in pieces that each fit one write (a forecast doesn't). The watch
-    /// joins them again; iOS sends queued writes in order.
+    /// Newline-terminated JSON, in pieces that each fit one write (a forecast or an image
+    /// doesn't). The watch joins them again. Watch apps from protocol 5 take writes without
+    /// response, several per connection interval, which an image needs; iOS keeps them in order
+    /// as long as only one kind is used.
     private func sendSync(_ message: [String: Any]) {
         guard let watch, let syncCharacteristic,
               var data = try? JSONSerialization.data(withJSONObject: message) else { return }
         data.append(0x0A)
         let size = max(20, watch.maximumWriteValueLength(for: .withoutResponse))
+        var pieces: [Data] = []
         var offset = 0
         while offset < data.count {
             let end = min(offset + size, data.count)
-            watch.writeValue(data.subdata(in: offset..<end), for: syncCharacteristic, type: .withResponse)
+            pieces.append(data.subdata(in: offset..<end))
             offset = end
+        }
+        if syncCharacteristic.properties.contains(.writeWithoutResponse) {
+            outbox.append(contentsOf: pieces)
+            pumpOutbox()
+        } else {
+            pieces.forEach { watch.writeValue($0, for: syncCharacteristic, type: .withResponse) }
+        }
+    }
+
+    /// Hands queued pieces to iOS while it has room; peripheralIsReady calls this again.
+    private func pumpOutbox() {
+        guard let watch, let syncCharacteristic else { return }
+        while !outbox.isEmpty && watch.canSendWriteWithoutResponse {
+            watch.writeValue(outbox.removeFirst(), for: syncCharacteristic, type: .withoutResponse)
         }
     }
 
@@ -236,6 +262,7 @@ extension WatchLink: CBCentralManagerDelegate {
         guard peripheral == watch else { return }
         syncCharacteristic = nil
         syncBuffer.removeAll()
+        outbox.removeAll()
         health.linkLost()
         state = .connecting
         central.connect(peripheral)
@@ -245,10 +272,16 @@ extension WatchLink: CBCentralManagerDelegate {
 extension WatchLink: CBPeripheralDelegate {
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
-        // Replies to requests arrive as notifications, so ask for settings only once they are on
+        // Replies to requests arrive as notifications, so ask for settings only once they are on.
+        // Say first what this app can do: it fetches icons and album art for the watch.
         if characteristic.uuid == Self.syncUUID && characteristic.isNotifying {
+            sendSync(["op": "hello", "features": ["images"]])
             refreshSettings()
         }
+    }
+
+    func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
+        pumpOutbox()
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {

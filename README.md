@@ -19,11 +19,13 @@ other wearables do, and adds an iPhone companion app for what iOS doesn't share 
 | iPhone notifications on the watch, with title, text and app icon, usually under a second | No |
 | Calls: ring on the watch, answer or decline, talk through the watch | No |
 | Music controls for whatever plays on the iPhone (Spotify, Apple Music, ...) | No |
+| Album art in the music controls, the media tile and the watch's own media controls | Yes |
 | Camera shutter for the iPhone camera | No |
 | iPhone battery level on the watch | No |
 | Connection stats: notification delay, uptime, drops (Settings → Connection stats) | No |
 | Quiet while asleep: Do Not Disturb and no raise-to-wake while the watch sees you sleep | No |
 | Watch battery and stats on the iPhone, and every WristLink setting | Yes |
+| App icons for apps the watch hasn't seen, without Wi-Fi on the watch | Yes (else the watch's Wi-Fi) |
 | Weather and sunrise/sunset: a tile, and complications for any watch face that takes them | Yes |
 | Two WristLink watch faces with the weather built in (see below) | Weather: yes |
 | Apple Health sync (steps, heart rate, sleep, ...) | Yes, [in progress](#roadmap) |
@@ -94,8 +96,7 @@ Health's sleep measurements (blood oxygen especially), Bluetooth and the screen.
 
 ## Roadmap
 
-- **iPhone app:** Apple Health sync, album art, app icons fetched by the iPhone so the watch needs
-  no Wi-Fi, ring phone / ring watch.
+- **iPhone app:** ring phone / ring watch, camera preview.
 - **Sleep:** better detection, sleep sessions to Apple Health.
 - **Workouts:** record on the watch, Apple Health with route, Strava upload.
 - **Don't buzz while the iPhone is in use.**

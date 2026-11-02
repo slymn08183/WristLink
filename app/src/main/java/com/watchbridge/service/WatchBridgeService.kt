@@ -18,6 +18,7 @@ import com.watchbridge.WatchBridgeApp
 import com.watchbridge.companion.CompanionGattServer
 import com.watchbridge.diagnostics.LinkStats
 import com.watchbridge.ams.AmsMediaManager
+import com.watchbridge.ams.AlbumArt
 import com.watchbridge.ams.MediaSessionBridge
 import com.watchbridge.ancs.AncsSessionManager
 import com.watchbridge.ble.BleAdvertiser
@@ -39,6 +40,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
@@ -93,6 +95,9 @@ class WatchBridgeService : Service() {
         var settingsManager: SettingsManager? = null
             private set
         var mediaManager: AmsMediaManager? = null
+            private set
+        /** Cover art for what's playing, fetched through the iPhone app. */
+        var albumArt: AlbumArt? = null
             private set
         var isRunning: Boolean = false
             private set
@@ -196,6 +201,7 @@ class WatchBridgeService : Service() {
         pipeline = pipe
         settingsManager = settings
         mediaManager = media
+        albumArt = AlbumArt(this, media)
         advertiser = adv
 
         bondMgr.register()
@@ -241,8 +247,13 @@ class WatchBridgeService : Service() {
         // The phone's now playing, as a media session the watch's own media controls can use
         val sessionBridge = MediaSessionBridge(this, media)
         mediaSessionBridge = sessionBridge
+        val art = albumArt!!
         serviceScope.launch(Dispatchers.Main) {
-            media.state.collect { sessionBridge.update(it) }
+            combine(media.state, art.art) { state, cover -> state to cover }
+                .collect { (state, cover) -> sessionBridge.update(state, cover) }
+        }
+        serviceScope.launch {
+            art.art.drop(1).collect { MediaTileService.requestUpdate(this@WatchBridgeService) }
         }
 
         // Watchdog: Android's background connect dies silently when the iPhone rotates its
@@ -375,6 +386,8 @@ class WatchBridgeService : Service() {
         pipeline = null
         settingsManager = null
         mediaManager = null
+        albumArt?.release()
+        albumArt = null
         advertiser = null
         isRunning = false
         ConnectionTileService.requestUpdate(this)

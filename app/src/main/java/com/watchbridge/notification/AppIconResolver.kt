@@ -12,6 +12,7 @@ import android.graphics.RectF
 import android.net.ConnectivityManager
 import android.util.Log
 import android.util.LruCache
+import com.watchbridge.companion.PhoneImages
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
@@ -34,7 +35,8 @@ import java.util.TimeZone
  * ANCS only tells us the bundle ID ("net.whatsapp.WhatsApp"), never the icon. Popular apps
  * have their icon shipped in the APK (assets/app_icons, from scripts/fetch_app_icons.py),
  * so they work offline from the very first notification. Any other app is looked up on the
- * App Store (iTunes Lookup API) and its artwork downloaded.
+ * App Store (iTunes Lookup API): by the WristLink iPhone app when it is connected, so the watch
+ * needs no Wi-Fi (PhoneImages), else by the watch itself over its own internet.
  *
  * Downloaded icons are cached on disk so each app is only fetched once. Lookups that fail
  * are remembered for a while so an offline watch doesn't hit the network on every notification.
@@ -53,6 +55,8 @@ class AppIconResolver(private val context: Context) {
         private const val LOOKUP_URL = "https://itunes.apple.com/lookup"
         private const val ICON_SIZE_PX = 128
         private const val NETWORK_TIMEOUT_MS = 5000
+        /** The iPhone app may have to be woken and go online first. */
+        private const val PHONE_TIMEOUT_MS = 20_000L
 
         /** Retry an app the App Store doesn't know about after a day. */
         private const val NOT_FOUND_RETRY_MS = 24 * 60 * 60 * 1000L
@@ -94,7 +98,7 @@ class AppIconResolver(private val context: Context) {
         }?.let { return it }
 
         if (System.currentTimeMillis() < missPrefs.getLong(bundleId, 0L)) return null
-        if (!isNetworkAvailable()) return null
+        if (!PhoneImages.available && !isNetworkAvailable()) return null
 
         val download = synchronized(inFlight) {
             inFlight.getOrPut(bundleId) {
@@ -133,21 +137,31 @@ class AppIconResolver(private val context: Context) {
         return bitmap
     }
 
-    private fun download(bundleId: String): Bitmap? {
+    private suspend fun download(bundleId: String): Bitmap? {
+        if (PhoneImages.available) {
+            when (val result = PhoneImages.fetch("icon", bundleId, PHONE_TIMEOUT_MS)) {
+                is PhoneImages.Result.Image -> {
+                    val raw = BitmapFactory.decodeByteArray(result.bytes, 0, result.bytes.size)
+                    if (raw != null) return save(bundleId, roundCorners(scaleToIconSize(raw)), "iPhone")
+                }
+                PhoneImages.Result.Missing -> {
+                    Log.d(TAG, "No App Store icon for $bundleId")
+                    rememberMiss(bundleId, NOT_FOUND_RETRY_MS)
+                    return null
+                }
+                // No answer: the watch's own internet, if it has any
+                null -> Unit
+            }
+        }
+        if (!isNetworkAvailable()) {
+            rememberMiss(bundleId, NETWORK_ERROR_RETRY_MS)
+            return null
+        }
         try {
             for (country in storefronts()) {
                 val artworkUrl = lookupArtworkUrl(bundleId, country) ?: continue
                 val raw = downloadBitmap(artworkUrl) ?: continue
-                val icon = roundCorners(raw)
-
-                iconDir.mkdirs()
-                iconFile(bundleId).outputStream().use {
-                    icon.compress(Bitmap.CompressFormat.PNG, 100, it)
-                }
-                memoryCache.put(bundleId, icon)
-                missPrefs.edit().remove(bundleId).apply()
-                Log.d(TAG, "Fetched icon for $bundleId (store=$country)")
-                return icon
+                return save(bundleId, roundCorners(raw), "store=$country")
             }
             Log.d(TAG, "No App Store icon for $bundleId")
             rememberMiss(bundleId, NOT_FOUND_RETRY_MS)
@@ -161,6 +175,17 @@ class AppIconResolver(private val context: Context) {
             rememberMiss(bundleId, NOT_FOUND_RETRY_MS)
         }
         return null
+    }
+
+    private fun save(bundleId: String, icon: Bitmap, source: String): Bitmap {
+        iconDir.mkdirs()
+        iconFile(bundleId).outputStream().use {
+            icon.compress(Bitmap.CompressFormat.PNG, 100, it)
+        }
+        memoryCache.put(bundleId, icon)
+        missPrefs.edit().remove(bundleId).apply()
+        Log.d(TAG, "Fetched icon for $bundleId ($source)")
+        return icon
     }
 
     /**

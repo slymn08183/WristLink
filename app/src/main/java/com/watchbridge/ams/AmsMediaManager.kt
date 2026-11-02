@@ -34,6 +34,7 @@ class AmsMediaManager(private val connectionManager: BleConnectionManager) {
         val volume: Float? = null,
         val title: String = "",
         val artist: String = "",
+        val album: String = "",
         val durationSeconds: Float = 0f,
         val supportedCommands: Set<Byte> = emptySet()
     ) {
@@ -128,6 +129,7 @@ class AmsMediaManager(private val connectionManager: BleConnectionManager) {
                 }
                 AmsConstants.ENTITY_TRACK -> when (attributeId) {
                     AmsConstants.TRACK_ATTR_ARTIST -> state.copy(artist = value)
+                    AmsConstants.TRACK_ATTR_ALBUM -> state.copy(album = value)
                     AmsConstants.TRACK_ATTR_TITLE -> state.copy(title = value)
                     AmsConstants.TRACK_ATTR_DURATION ->
                         state.copy(durationSeconds = value.toFloatOrNull() ?: 0f)

@@ -1,6 +1,12 @@
 package com.watchbridge.tile
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
+import android.graphics.RectF
 import androidx.concurrent.futures.CallbackToFutureAdapter
 import androidx.wear.protolayout.ActionBuilders
 import androidx.wear.protolayout.ColorBuilders.argb
@@ -23,6 +29,7 @@ import com.watchbridge.ams.AmsConstants
 import com.watchbridge.ams.AmsMediaManager
 import com.watchbridge.service.WatchBridgeService
 import com.watchbridge.ui.MediaActivity
+import java.io.ByteArrayOutputStream
 import kotlin.math.roundToInt
 
 /**
@@ -50,6 +57,8 @@ class MediaTileService : TileService() {
         private const val ICON_NEXT = "next"
         private const val ICON_VOLUME_DOWN = "volume_down"
         private const val ICON_VOLUME_UP = "volume_up"
+        private const val IMAGE_ART = "art"
+        private const val ART_PX = 64
 
         /** iOS changes the volume in 16 steps. */
         private const val VOLUME_STEP = 1f / 16
@@ -104,16 +113,16 @@ class MediaTileService : TileService() {
         val deviceParameters = requestParams.deviceConfiguration
         val openApp = launchMediaApp()
 
+        // Without a track the player's name moves down into the title
+        val label = text(
+            if (state.title.isNotEmpty()) state.playerName.ifEmpty { "Music Control" } else "Music Control",
+            Typography.TYPOGRAPHY_CAPTION1,
+            COLOR_PRIMARY
+        )
+        val hasArt = state.hasPlayer && WatchBridgeService.albumArt?.art?.value != null
         val layout = PrimaryLayout.Builder(deviceParameters)
             .setResponsiveContentInsetEnabled(true)
-            .setPrimaryLabelTextContent(
-                text(
-                    // Without a track the player's name moves down into the title
-                    if (state.title.isNotEmpty()) state.playerName.ifEmpty { "Music Control" } else "Music Control",
-                    Typography.TYPOGRAPHY_CAPTION1,
-                    COLOR_PRIMARY
-                )
-            )
+            .setPrimaryLabelTextContent(if (hasArt) labelWithArt(label) else label)
             .setContent(
                 if (state.hasPlayer) {
                     playerContent(state, openApp, showArtist = deviceParameters.screenHeightDp >= MIN_HEIGHT_FOR_ARTIST_DP)
@@ -124,7 +133,7 @@ class MediaTileService : TileService() {
             .build()
 
         val tile = TileBuilders.Tile.Builder()
-            .setResourcesVersion(RESOURCES_VERSION)
+            .setResourcesVersion(resourcesVersion())
             .setTileTimeline(TimelineBuilders.Timeline.fromLayoutElement(layout))
             .build()
         return immediateFuture(tile)
@@ -135,7 +144,8 @@ class MediaTileService : TileService() {
     ): ListenableFuture<ResourceBuilders.Resources> =
         immediateFuture(
             ResourceBuilders.Resources.Builder()
-                .setVersion(RESOURCES_VERSION)
+                .setVersion(resourcesVersion())
+                .apply { artImage()?.let { addIdToImageMapping(IMAGE_ART, it) } }
                 .addIdToImageMapping(ICON_PLAY, image(R.drawable.ic_play))
                 .addIdToImageMapping(ICON_PAUSE, image(R.drawable.ic_pause))
                 .addIdToImageMapping(ICON_PREVIOUS, image(R.drawable.ic_skip_previous))
@@ -189,6 +199,51 @@ class MediaTileService : TileService() {
             .addContent(buttons.build())
             .addContent(LayoutElementBuilders.Spacer.Builder().setHeight(dp(2f)).build())
             .addContent(volumeRow(state, ::supported))
+            .build()
+    }
+
+    /** The images change with the cover, so the version does too. */
+    private fun resourcesVersion(): String =
+        RESOURCES_VERSION + (WatchBridgeService.albumArt?.art?.value?.let { "-" + it.generationId } ?: "")
+
+    /** The cover, small and rounded, in front of the player's name. */
+    private fun labelWithArt(label: LayoutElementBuilders.LayoutElement): LayoutElementBuilders.LayoutElement =
+        LayoutElementBuilders.Row.Builder()
+            .setVerticalAlignment(LayoutElementBuilders.VERTICAL_ALIGN_CENTER)
+            .addContent(
+                LayoutElementBuilders.Image.Builder()
+                    .setResourceId(IMAGE_ART)
+                    .setWidth(dp(20f))
+                    .setHeight(dp(20f))
+                    .build()
+            )
+            .addContent(horizontalSpace(6f))
+            .addContent(label)
+            .build()
+
+    private fun artImage(): ResourceBuilders.ImageResource? {
+        val art = WatchBridgeService.albumArt?.art?.value ?: return null
+        // Rounded here: tile images can't clip themselves
+        val rounded = Bitmap.createBitmap(ART_PX, ART_PX, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(rounded)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        val size = ART_PX.toFloat()
+        canvas.drawRoundRect(RectF(0f, 0f, size, size), size / 4, size / 4, paint)
+        paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN)
+        canvas.drawBitmap(art, null, RectF(0f, 0f, size, size), paint)
+        val png = ByteArrayOutputStream().use {
+            rounded.compress(Bitmap.CompressFormat.PNG, 100, it)
+            it.toByteArray()
+        }
+        return ResourceBuilders.ImageResource.Builder()
+            .setInlineResource(
+                ResourceBuilders.InlineImageResource.Builder()
+                    .setData(png)
+                    .setWidthPx(ART_PX)
+                    .setHeightPx(ART_PX)
+                    .setFormat(ResourceBuilders.IMAGE_FORMAT_UNDEFINED)
+                    .build()
+            )
             .build()
     }
 

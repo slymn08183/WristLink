@@ -1,7 +1,10 @@
 package com.watchbridge.ui.screens
 
+import android.graphics.Bitmap
 import android.os.SystemClock
 import androidx.annotation.DrawableRes
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,6 +26,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.res.painterResource
@@ -42,6 +49,7 @@ import androidx.wear.compose.material.TimeText
 import com.watchbridge.R
 import com.watchbridge.ams.AmsConstants
 import com.watchbridge.ams.AmsMediaManager
+import com.watchbridge.service.WatchBridgeService
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlin.math.roundToInt
@@ -57,6 +65,9 @@ private const val ROTARY_VOLUME_STEP_PX = 50f
 fun NowPlayingScreen(media: AmsMediaManager?) {
     val fallback = remember { MutableStateFlow(AmsMediaManager.MediaState()) }
     val state by (media?.state ?: fallback).collectAsState()
+    // The cover, once the iPhone app has sent it
+    val noArt = remember { MutableStateFlow<Bitmap?>(null) }
+    val art by (remember(media) { WatchBridgeService.albumArt?.art } ?: noArt).collectAsState()
 
     // iOS only reports the position on changes, so tick it locally while playing
     var now by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
@@ -94,6 +105,22 @@ fun NowPlayingScreen(media: AmsMediaManager?) {
             .focusable()
     ) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            // The cover fills the screen, darkened towards the edge so the controls stay readable
+            val cover = art
+            if (state.hasPlayer && cover != null) {
+                Image(
+                    bitmap = cover.asImageBitmap(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    alpha = 0.55f,
+                    modifier = Modifier.fillMaxSize()
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Brush.radialGradient(listOf(Color.Black.copy(alpha = 0.35f), Color.Black.copy(alpha = 0.85f))))
+                )
+            }
             if (state.hasPlayer && state.durationSeconds > 0f) {
                 // Gap at the top leaves room for the time
                 CircularProgressIndicator(

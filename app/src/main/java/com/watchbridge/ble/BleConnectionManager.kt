@@ -385,6 +385,21 @@ class BleConnectionManager(
             .enqueue()
     }
 
+    /**
+     * A short burst of data is coming (an icon or album art from the iPhone app): ask for the
+     * fast interval while it lasts, then go back to low power with [relaxAfterTransfer].
+     */
+    fun speedUpForTransfer() {
+        if (!isConnected) return
+        requestConnectionPriority(ConnectionPriorityRequest.CONNECTION_PRIORITY_HIGH)
+            .fail { _, status -> Log.w(TAG, "High connection priority not accepted: $status") }
+            .enqueue()
+    }
+
+    fun relaxAfterTransfer() {
+        if (isConnected) relaxConnectionInterval()
+    }
+
     /** The phone's own name, a fallback for when the watch's Bluetooth has no name for it. */
     private fun readDeviceName() {
         val name = currentGatt?.getService(GENERIC_ACCESS_UUID)?.getCharacteristic(DEVICE_NAME_UUID)
@@ -483,6 +498,7 @@ class BleConnectionManager(
             byteArrayOf(
                 AmsConstants.ENTITY_TRACK,
                 AmsConstants.TRACK_ATTR_ARTIST,
+                AmsConstants.TRACK_ATTR_ALBUM,
                 AmsConstants.TRACK_ATTR_TITLE,
                 AmsConstants.TRACK_ATTR_DURATION
             ),
