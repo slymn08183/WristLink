@@ -95,11 +95,18 @@ class DashboardRenderer(
 
         canvas.drawColor(Color.BLACK)
 
+        // A few pixels further each minute, so no pixel stays lit for hours (Ambient)
+        canvas.save()
+        Ambient.offset(zonedDateTime).let { (dx, dy) -> canvas.translate(dx * u, dy * u) }
+
         if (renderParameters.watchFaceLayers.contains(WatchFaceLayer.BASE)) {
             drawWeather(canvas, u, cx, zonedDateTime, ambient)
             drawDate(canvas, u, cx, zonedDateTime, ambient)
 
-            timePaint.color = if (ambient) DashboardStyle.AMBIENT else Color.WHITE
+            // Always On draws the digits as outlines: a fraction of the pixels stay lit
+            timePaint.style = if (ambient) Paint.Style.STROKE else Paint.Style.FILL
+            timePaint.strokeWidth = 1.8f * u
+            timePaint.color = if (ambient) Ambient.TEXT else Color.WHITE
             timePaint.textSize = 118 * u
             val pattern = if (DateFormat.is24HourFormat(context)) "HH:mm" else "h:mm"
             canvas.drawText(DateTimeFormatter.ofPattern(pattern).format(zonedDateTime), cx, 270 * u, timePaint)
@@ -110,6 +117,7 @@ class DashboardRenderer(
                 if (slot.enabled) slot.render(canvas, zonedDateTime, renderParameters)
             }
         }
+        canvas.restore()
     }
 
     override fun renderHighlightLayer(canvas: Canvas, bounds: Rect, zonedDateTime: ZonedDateTime, sharedAssets: Assets) {
@@ -130,8 +138,8 @@ class DashboardRenderer(
         val number = "%02d".format(now.dayOfMonth)
         dayPaint.textSize = 36 * u
         dateNumberPaint.textSize = 36 * u
-        dayPaint.color = if (ambient) DashboardStyle.AMBIENT else style.accent
-        dateNumberPaint.color = if (ambient) DashboardStyle.AMBIENT else Color.WHITE
+        dayPaint.color = if (ambient) Ambient.DIM else style.accent
+        dateNumberPaint.color = if (ambient) Ambient.DIM else Color.WHITE
         val gap = 10 * u
         val width = dayPaint.measureText(day) + gap + dateNumberPaint.measureText(number)
         val left = cx - width / 2
@@ -150,11 +158,12 @@ class DashboardRenderer(
         val temp = forecast.formatTemp(conditions.temp)
         val range = today?.let { "↑${forecast.formatTemp(it.max)} ↓${forecast.formatTemp(it.min)}" }
         tempPaint.textSize = 28 * u
-        tempPaint.color = if (ambient) DashboardStyle.AMBIENT else Color.WHITE
+        tempPaint.color = if (ambient) Ambient.DIM else Color.WHITE
         rangePaint.textSize = 19 * u
-        rangePaint.color = if (ambient) DashboardStyle.AMBIENT else COLOR_RANGE
+        rangePaint.color = if (ambient) Ambient.DIM else COLOR_RANGE
 
-        val iconSize = 30 * u
+        // No icon on Always On
+        val iconSize = if (ambient) 0f else 30 * u
         val gap = 7 * u
         val rangeGap = 10 * u
         val width = iconSize + gap + tempPaint.measureText(temp) +
@@ -162,12 +171,14 @@ class DashboardRenderer(
         var x = cx - width / 2
         val middle = 92 * u
 
-        val res = Sky.icon(conditions.code, conditions.isDay)
-        val icon = icons.getOrPut(res) { ContextCompat.getDrawable(context, res)!!.mutate() }
-        icon.setTint(if (ambient) DashboardStyle.AMBIENT else Sky.tint(conditions.code, conditions.isDay))
-        icon.setBounds(x.toInt(), (middle - iconSize / 2).toInt(), (x + iconSize).toInt(), (middle + iconSize / 2).toInt())
-        icon.draw(canvas)
-        x += iconSize + gap
+        if (!ambient) {
+            val res = Sky.icon(conditions.code, conditions.isDay)
+            val icon = icons.getOrPut(res) { ContextCompat.getDrawable(context, res)!!.mutate() }
+            icon.setTint(Sky.tint(conditions.code, conditions.isDay))
+            icon.setBounds(x.toInt(), (middle - iconSize / 2).toInt(), (x + iconSize).toInt(), (middle + iconSize / 2).toInt())
+            icon.draw(canvas)
+            x += iconSize + gap
+        }
 
         canvas.drawText(temp, x, middle + 10 * u, tempPaint)
         x += tempPaint.measureText(temp) + rangeGap

@@ -70,7 +70,9 @@ class BoxComplication(
         }?.getTextAt(context.resources, zonedDateTime.toInstant())?.toString().orEmpty()
 
         textPaint.textSize = 28 * u
-        textPaint.color = if (ambient) DashboardStyle.AMBIENT else Color.WHITE
+        textPaint.color = if (ambient) Ambient.DIM else Color.WHITE
+        // Always On: the value alone (see Ambient)
+        val icon = if (ambient) null else icon
         val iconSize = 28 * u
         val gap = if (icon != null && text.isNotEmpty()) 8 * u else 0f
         val width = (if (icon != null) iconSize else 0f) + gap + textPaint.measureText(text)
@@ -78,7 +80,7 @@ class BoxComplication(
         val cy = bounds.exactCenterY()
 
         icon?.let {
-            it.setTint(if (ambient) DashboardStyle.AMBIENT else style.boxIconColor)
+            it.setTint(style.boxIconColor)
             it.setBounds(x.toInt(), (cy - iconSize / 2).toInt(), (x + iconSize).toInt(), (cy + iconSize / 2).toInt())
             it.draw(canvas)
             x += iconSize + gap

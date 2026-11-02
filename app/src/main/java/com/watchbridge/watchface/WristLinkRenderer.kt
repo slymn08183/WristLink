@@ -65,7 +65,6 @@ class WristLinkRenderer(
         private const val COLOR_HINT = 0xFF7D8396.toInt()
         private const val COLOR_CARD = 0xFF151A2B.toInt()
         private const val COLOR_TRACK = 0xFF2A3047.toInt()
-        private const val COLOR_AMBIENT = 0xFFA0A0A0.toInt()
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -98,16 +97,23 @@ class WristLinkRenderer(
         val ambient = renderParameters.drawMode == DrawMode.AMBIENT
         val scale = bounds.width() / UNIT
         val cx = bounds.exactCenterX()
-        val accent = if (ambient) COLOR_AMBIENT else theme.accent
+        val accent = if (ambient) Ambient.DIM else theme.accent
 
         canvas.drawColor(Color.BLACK)
 
+        // A few pixels further each minute, so no pixel stays lit for hours (Ambient)
+        canvas.save()
+        Ambient.offset(zonedDateTime).let { (dx, dy) -> canvas.translate(dx * scale, dy * scale) }
+
         if (renderParameters.watchFaceLayers.contains(WatchFaceLayer.BASE)) {
-            datePaint.color = accent
+            datePaint.color = if (ambient) Ambient.DIM else accent
             datePaint.textSize = 24 * scale
             canvas.drawText(dateFormat.format(zonedDateTime).uppercase(Locale.getDefault()), cx, 92 * scale, datePaint)
 
-            timePaint.color = if (ambient) COLOR_AMBIENT else Color.WHITE
+            // Always On draws the digits as outlines: a fraction of the pixels stay lit
+            timePaint.style = if (ambient) Paint.Style.STROKE else Paint.Style.FILL
+            timePaint.strokeWidth = 1.6f * scale
+            timePaint.color = if (ambient) Ambient.TEXT else Color.WHITE
             timePaint.textSize = 108 * scale
             val pattern = if (DateFormat.is24HourFormat(context)) "HH:mm" else "h:mm"
             canvas.drawText(DateTimeFormatter.ofPattern(pattern).format(zonedDateTime), cx, 196 * scale, timePaint)
@@ -120,6 +126,7 @@ class WristLinkRenderer(
                 if (slot.enabled) slot.render(canvas, zonedDateTime, renderParameters)
             }
         }
+        canvas.restore()
     }
 
     override fun renderHighlightLayer(canvas: Canvas, bounds: Rect, zonedDateTime: ZonedDateTime, sharedAssets: Assets) {
@@ -148,27 +155,31 @@ class WristLinkRenderer(
         }
 
         val temp = forecast.formatTemp(conditions.temp)
-        tempPaint.color = if (ambient) COLOR_AMBIENT else Color.WHITE
-        tempPaint.textSize = 60 * scale
-        val iconSize = 52 * scale
-        val gap = 12 * scale
+        tempPaint.color = if (ambient) Ambient.DIM else Color.WHITE
+        tempPaint.textSize = (if (ambient) 40 else 60) * scale
+        // Always On: the temperature alone, smaller (see Ambient)
+        val iconSize = if (ambient) 0f else 52 * scale
+        val gap = if (ambient) 0f else 12 * scale
         val left = cx - (iconSize + gap + tempPaint.measureText(temp)) / 2
         val iconTop = 212 * scale
 
         val icon = icons.getOrPut(Sky.icon(conditions.code, conditions.isDay)) {
             ContextCompat.getDrawable(context, Sky.icon(conditions.code, conditions.isDay))!!.mutate()
         }
-        icon.setTint(accent)
-        icon.setBounds(left.toInt(), iconTop.toInt(), (left + iconSize).toInt(), (iconTop + iconSize).toInt())
-        icon.draw(canvas)
-        canvas.drawText(temp, left + iconSize + gap, iconTop + iconSize / 2 + 21 * scale, tempPaint)
+        if (!ambient) {
+            icon.setTint(accent)
+            icon.setBounds(left.toInt(), iconTop.toInt(), (left + iconSize).toInt(), (iconTop + iconSize).toInt())
+            icon.draw(canvas)
+        }
+        canvas.drawText(temp, left + iconSize + gap, 212 * scale + 26 * scale + 21 * scale, tempPaint)
+        if (ambient) return
 
         val today = forecast.day(at)
         val line = listOfNotNull(
             Sky.label(conditions.code, conditions.isDay),
             today?.let { "${forecast.formatTemp(it.max)} / ${forecast.formatTemp(it.min)}" }
         ).joinToString("  ·  ")
-        detailPaint.color = if (ambient) COLOR_AMBIENT else COLOR_DETAIL
+        detailPaint.color = if (ambient) Ambient.DIM else COLOR_DETAIL
         canvas.drawText(line, cx, 300 * scale, detailPaint)
     }
 
@@ -188,15 +199,16 @@ class WristLinkRenderer(
                 titleColor = COLOR_DETAIL
                 highlightColor = theme.accent
             }
+            // Always On: dim text only, no ring or icon (see Ambient)
             drawable.ambientStyle.apply {
                 backgroundColor = Color.BLACK
                 borderStyle = ComplicationStyle.BORDER_STYLE_NONE
-                rangedValuePrimaryColor = COLOR_AMBIENT
+                rangedValuePrimaryColor = Color.BLACK
                 rangedValueSecondaryColor = Color.BLACK
                 rangedValueRingWidth = ring
-                iconColor = COLOR_AMBIENT
-                textColor = COLOR_AMBIENT
-                titleColor = COLOR_AMBIENT
+                iconColor = Color.BLACK
+                textColor = Ambient.DIM
+                titleColor = Ambient.DIM
             }
         }
     }

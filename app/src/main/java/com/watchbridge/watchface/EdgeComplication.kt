@@ -56,6 +56,8 @@ class EdgeComplication(
     }
 
     private companion object {
+        const val LAST_VALUES = "edge_last_values"
+        const val REMEMBER_MS = 24 * 60 * 60 * 1000L
         /** Room at each quarter's ends for the icons. */
         const val GAP = 11f
         const val RADIUS = 203f
@@ -68,6 +70,14 @@ class EdgeComplication(
     private var data: ComplicationData = NoDataComplicationData()
     private var icon: Drawable? = null
     private var iconTintable = true
+
+    /**
+     * Samsung Health sends a reading only while it's fresh, and just "Heart rate" or "Blood
+     * oxygen" after that. Like Samsung's own faces, keep showing the last reading (a bit dimmer)
+     * until a new one comes or it is a day old.
+     */
+    private val lastValues = context.getSharedPreferences(LAST_VALUES, Context.MODE_PRIVATE)
+    private var remembered: String? = null
 
     private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -89,6 +99,7 @@ class EdgeComplication(
 
     override fun loadData(complicationData: ComplicationData, loadDrawablesAsynchronous: Boolean) {
         data = complicationData
+        remembered = remember(complicationData)
         val small = (complicationData as? SmallImageComplicationData)?.smallImage?.image
         iconTintable = small == null
         icon = (monochromaticImage(complicationData)?.image ?: small)?.loadDrawable(context)?.mutate()
@@ -105,7 +116,7 @@ class EdgeComplication(
         val ambient = renderParameters.drawMode == DrawMode.AMBIENT
         val u = canvas.width / 450f
         val center = canvas.width / 2f
-        val (startColor, endColor) = if (ambient) DashboardStyle.AMBIENT to DashboardStyle.AMBIENT else style.cornerColors(corner)
+        val (startColor, endColor) = style.cornerColors(corner)
 
         val radius = RADIUS * u
         oval.set(center - radius, center - radius, center + radius, center + radius)
@@ -117,16 +128,17 @@ class EdgeComplication(
         }
 
         // The value: a gradient running along the arc, and a white dot where it ends
+        // Always On keeps only the value, dim: no arcs, fills or icons (see Ambient)
         val progress = progress(data)
         var labelAngle = corner.start + sweep / 2
         if (progress != null && progress > 0f) {
             val filled = sweep * progress
-            fillPaint.strokeWidth = (if (ambient) 4f else STROKE) * u
-            fillPaint.shader = if (ambient) null else gradient(center, startColor, endColor)
-            fillPaint.color = endColor
-            canvas.drawArc(oval, corner.start - 90, filled, false, fillPaint)
             val endAngle = corner.start + filled
             if (!ambient) {
+                fillPaint.strokeWidth = STROKE * u
+                fillPaint.shader = gradient(center, startColor, endColor)
+                fillPaint.color = endColor
+                canvas.drawArc(oval, corner.start - 90, filled, false, fillPaint)
                 val (dx, dy) = point(center, radius, endAngle)
                 canvas.drawCircle(dx, dy, 5.5f * u, dotPaint)
             }
@@ -134,7 +146,7 @@ class EdgeComplication(
         }
 
         // Icon in the gap at the quarter's start
-        icon?.let {
+        if (!ambient) icon?.let {
             val (ix, iy) = point(center, radius, corner.cardinal)
             val half = ICON / 2 * u
             if (iconTintable) it.setTint(startColor) else it.setTintList(null)
@@ -143,8 +155,9 @@ class EdgeComplication(
         }
 
         // The value along the arc, turned to follow it and kept upright
-        val text = text(data, zonedDateTime.toInstant()) ?: return
-        textPaint.color = if (ambient) DashboardStyle.AMBIENT else endColor
+        val text = remembered ?: text(data, zonedDateTime.toInstant()) ?: return
+        textPaint.color = if (ambient) Ambient.DIM else endColor
+        if (remembered != null && !ambient) textPaint.alpha = 160
         textPaint.textSize = 22 * u
         val (tx, ty) = point(center, TEXT_RADIUS * u, labelAngle)
         val rotation = if (labelAngle % 360 in 90f..270f) labelAngle - 180 else labelAngle
@@ -196,13 +209,30 @@ class EdgeComplication(
      * filled from the number: percentages as they are, heart rate across 40 to 200 bpm.
      */
     private fun textProgress(data: ShortTextComplicationData): Float? {
-        val text = data.text.getTextAt(context.resources, Instant.now()).toString().trim()
+        val text = (remembered ?: data.text.getTextAt(context.resources, Instant.now()).toString()).trim()
         val number = NUMBER.find(text)?.value?.replace(",", "")?.toFloatOrNull() ?: return null
         return when {
             text.endsWith("%") -> number / 100f
             data.dataSource?.className?.contains("heart", ignoreCase = true) == true -> (number - 40f) / 160f
             else -> null
         }?.coerceIn(0f, 1f)
+    }
+
+    /**
+     * Saves a reading from a text data source, or returns the last one when the source only sent
+     * its name. Null when there's a fresh reading or nothing worth remembering.
+     */
+    private fun remember(data: ComplicationData): String? {
+        if (data !is ShortTextComplicationData) return null
+        val source = data.dataSource?.flattenToShortString() ?: return null
+        val text = data.text.getTextAt(context.resources, Instant.now()).toString().trim()
+        val now = System.currentTimeMillis()
+        if (text.any(Char::isDigit)) {
+            lastValues.edit().putString(source, text).putLong("$source@", now).apply()
+            return null
+        }
+        if (now - lastValues.getLong("$source@", 0L) > REMEMBER_MS) return null
+        return lastValues.getString(source, null)
     }
 
     /** Short values only: words like "Heart rate" before a first reading are left out. */
@@ -244,7 +274,6 @@ class DashboardStyle {
     companion object {
         const val COLORFUL_ID = "colorful"
         const val TRACK = 0xFF262A36.toInt()
-        const val AMBIENT = 0xFFA0A0A0.toInt()
         const val ACCENT = 0xFF29A9E0.toInt()
 
         private val COLORFUL = mapOf(
