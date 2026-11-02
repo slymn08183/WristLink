@@ -29,8 +29,15 @@ final class HealthAccess: ObservableObject {
         HKObjectType.workoutType()
     ]
 
+    private static let askedKey = "healthAccessAsked"
+
     init() {
-        status = HKHealthStore.isHealthDataAvailable() ? .notAsked : .unavailable
+        if !HKHealthStore.isHealthDataAvailable() {
+            status = .unavailable
+        } else {
+            // iOS never says whether write access was granted, only that the question was asked
+            status = UserDefaults.standard.bool(forKey: Self.askedKey) ? .asked : .notAsked
+        }
     }
 
     func requestAccess() async {
@@ -38,6 +45,7 @@ final class HealthAccess: ObservableObject {
         do {
             // Reading back the same types is how duplicates get avoided later
             try await store.requestAuthorization(toShare: writeTypes, read: writeTypes)
+            UserDefaults.standard.set(true, forKey: Self.askedKey)
             status = .asked
         } catch {
             status = .failed(error.localizedDescription)

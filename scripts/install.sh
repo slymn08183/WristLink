@@ -291,6 +291,10 @@ adb -s "$CONN_ADDR" shell cmd appops set "$PACKAGE" RUN_ANY_IN_BACKGROUND allow 
 # "Quiet while asleep": step counter, Do Not Disturb, and turning off raise-to-wake.
 # None of these have an on-watch permission screen.
 adb -s "$CONN_ADDR" shell pm grant "$PACKAGE" android.permission.ACTIVITY_RECOGNITION >/dev/null 2>&1
+# Heart rate for Apple Health (Wear OS 6 also needs the health.* names)
+for p in BODY_SENSORS BODY_SENSORS_BACKGROUND health.READ_HEART_RATE health.READ_HEALTH_DATA_IN_BACKGROUND; do
+  adb -s "$CONN_ADDR" shell pm grant "$PACKAGE" "android.permission.$p" >/dev/null 2>&1
+done
 adb -s "$CONN_ADDR" shell cmd notification allow_dnd "$PACKAGE" >/dev/null 2>&1
 adb -s "$CONN_ADDR" shell pm grant "$PACKAGE" android.permission.WRITE_SECURE_SETTINGS >/dev/null 2>&1 \
   && ok "Sleep quiet mode can manage Do Not Disturb and raise-to-wake"

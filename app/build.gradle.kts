@@ -97,6 +97,10 @@ dependencies {
 
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.kotlinx.coroutines.guava)
+
+    // Health Services: passive steps, heart rate, calories, sleep state
+    implementation(libs.health.services.client)
 
     testImplementation(libs.junit)
 }

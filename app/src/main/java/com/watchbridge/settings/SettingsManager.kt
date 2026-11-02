@@ -28,6 +28,7 @@ class SettingsManager(context: Context) {
         private const val KEY_PHONE_BATTERY_ALERT = "phone_battery_alert"
         private const val KEY_STATUS_NOTIFICATION = "status_notification"
         private const val KEY_SLEEP_GUARD = "sleep_guard"
+        private const val KEY_DISCONNECT_ALERT = "disconnect_alert"
         private const val KEY_CALL_PERMISSIONS_ASKED = "call_permissions_asked"
         private const val KEY_CATEGORY_PREFIX = "category_enabled_"
     }
@@ -156,6 +157,16 @@ class SettingsManager(context: Context) {
     fun setSleepGuard(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_SLEEP_GUARD, enabled).apply()
         _sleepGuard.value = enabled
+    }
+
+    private val _disconnectAlert = MutableStateFlow(prefs.getBoolean(KEY_DISCONNECT_ALERT, true))
+
+    /** Buzz when the iPhone has been out of reach for a while (like Samsung's alert for Android phones). */
+    val disconnectAlert: StateFlow<Boolean> = _disconnectAlert.asStateFlow()
+
+    fun setDisconnectAlert(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_DISCONNECT_ALERT, enabled).apply()
+        _disconnectAlert.value = enabled
     }
 
     fun setShowPhoneInfo(enabled: Boolean) {

@@ -16,6 +16,7 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.watchbridge.health.HealthCollector
 import com.watchbridge.settings.SettingsManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,9 +31,11 @@ import kotlin.coroutines.resume
  * Quiets the watch while its wearer sleeps, the way fitness bands do: Do Not Disturb on, and
  * raising the wrist no longer lights up the screen. Undone on waking.
  *
- * Asleep means: inside the night window, and the step counter barely moved since the last check.
- * Awake means: a real burst of steps, or the window ending. Checks run on an inexact alarm every
- * [CHECK_INTERVAL_MS]; reading the hardware step counter costs next to nothing.
+ * Where the watch detects sleep itself (Health Services `USER_ACTIVITY_ASLEEP`, e.g. Galaxy Watch4),
+ * that decides: see [onPlatformSleepState]. Otherwise asleep means: inside the night window, and the
+ * step counter barely moved since the last check; awake means a real burst of steps, or the window
+ * ending. Checks run on an inexact alarm every [CHECK_INTERVAL_MS]; reading the hardware step
+ * counter costs next to nothing.
  *
  * Needs two permissions only adb can grant on a watch (see README):
  *   cmd notification allow_dnd com.watchbridge
@@ -102,7 +105,26 @@ object SleepGuard {
         }
     }
 
+    /**
+     * The watch's own sleep detection (Health Services, see HealthCollector) changed state. Where
+     * the watch has it, this is what drives quiet mode; the step-counter check stays as a fallback.
+     */
+    fun onPlatformSleepState(context: Context, asleep: Boolean) {
+        if (!SettingsManager(context).isSleepGuardEnabled) return
+        scope.launch {
+            when {
+                asleep && !isAsleep(context) -> fallAsleep(context)
+                !asleep && isAsleep(context) -> wakeUp(context)
+            }
+        }
+    }
+
     private suspend fun evaluate(context: Context) {
+        if (HealthCollector.platformSleepSupported.value == true) {
+            // The watch reports sleep itself; only make sure quiet mode doesn't outlast the night
+            if (isAsleep(context) && !inNightWindow() && !HealthCollector.isAsleepNow(context)) wakeUp(context)
+            return
+        }
         val prefs = prefs(context)
         val steps = readStepCount(context)
         val lastSteps = prefs.getLong(KEY_LAST_STEPS, -1)

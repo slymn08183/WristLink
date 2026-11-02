@@ -11,10 +11,15 @@ struct WatchInfo: Decodable, Equatable {
     let drops: Int
     let medianDelayMs: Int?
     let notifications: Int
+    // Protocol 2
+    let model: String?
+    let pending: Int?
+    let sleepSupported: Bool?
 
     enum CodingKeys: String, CodingKey {
         case protocolVersion = "protocol"
         case app, battery, charging, connectedPct, drops, medianDelayMs, notifications
+        case model, pending, sleepSupported
     }
 }
 
@@ -28,6 +33,7 @@ final class WatchLink: NSObject, ObservableObject {
 
     static let serviceUUID = CBUUID(string: "57A1E1C0-0001-4B8E-9A1F-6F4B10000000")
     static let infoUUID = CBUUID(string: "57A1E1C0-0002-4B8E-9A1F-6F4B10000000")
+    static let syncUUID = CBUUID(string: "57A1E1C0-0003-4B8E-9A1F-6F4B10000000")
     /// Every Bluetooth LE device has Generic Access, so this lists everything iOS is connected to.
     private static let genericAccessUUID = CBUUID(string: "1800")
     private static let savedWatchKey = "watchIdentifier"
@@ -49,11 +55,18 @@ final class WatchLink: NSObject, ObservableObject {
     @Published private(set) var candidates: [CBPeripheral] = []
     @Published private(set) var watchName: String?
 
+    /// Apple Health sync, fed by the sync characteristic.
+    let health = HealthSync()
+
     private var central: CBCentralManager!
     private var watch: CBPeripheral?
+    private var syncCharacteristic: CBCharacteristic?
+    /// Sync messages are newline-terminated JSON split across notifications.
+    private var syncBuffer = Data()
 
     override init() {
         super.init()
+        health.send = { [weak self] message in self?.sendSync(message) }
         central = CBCentralManager(
             delegate: self,
             queue: nil,
@@ -99,6 +112,17 @@ final class WatchLink: NSObject, ObservableObject {
         }
         state = .choosing
         refreshCandidates()
+    }
+
+    /// Pull what the watch has for Apple Health now (the app also does this on its own).
+    func syncHealth() {
+        health.start()
+    }
+
+    private func sendSync(_ message: [String: Any]) {
+        guard let watch, let syncCharacteristic,
+              let data = try? JSONSerialization.data(withJSONObject: message) else { return }
+        watch.writeValue(data, for: syncCharacteristic, type: .withResponse)
     }
 
     private func attach(_ peripheral: CBPeripheral) {
@@ -147,6 +171,9 @@ extension WatchLink: CBCentralManagerDelegate {
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         guard peripheral == watch else { return }
+        syncCharacteristic = nil
+        syncBuffer.removeAll()
+        health.linkLost()
         state = .connecting
         central.connect(peripheral)
     }
@@ -159,7 +186,7 @@ extension WatchLink: CBPeripheralDelegate {
             state = .noCompanionService
             return
         }
-        peripheral.discoverCharacteristics([Self.infoUUID], for: service)
+        peripheral.discoverCharacteristics([Self.infoUUID, Self.syncUUID], for: service)
     }
 
     func peripheral(_ peripheral: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
@@ -173,14 +200,36 @@ extension WatchLink: CBPeripheralDelegate {
             return
         }
         state = .connected
+        // Sync first, so it's ready by the time the info read reports pending samples
+        if let sync = service.characteristics?.first(where: { $0.uuid == Self.syncUUID }) {
+            syncCharacteristic = sync
+            peripheral.setNotifyValue(true, for: sync)
+        }
         peripheral.readValue(for: infoCharacteristic)
         peripheral.setNotifyValue(true, for: infoCharacteristic)
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
-        guard characteristic.uuid == Self.infoUUID, let data = characteristic.value else { return }
-        if let decoded = try? JSONDecoder().decode(WatchInfo.self, from: data) {
+        guard let data = characteristic.value else { return }
+        switch characteristic.uuid {
+        case Self.infoUUID:
+            guard let decoded = try? JSONDecoder().decode(WatchInfo.self, from: data) else { return }
             info = decoded
+            health.deviceModel = decoded.model
+            health.watchAppVersion = decoded.app
+            // The watch announces waiting samples through info; fetch them while iOS lets us run
+            if (decoded.pending ?? 0) > 0 && syncCharacteristic != nil {
+                health.start()
+            }
+        case Self.syncUUID:
+            syncBuffer.append(data)
+            while let newline = syncBuffer.firstIndex(of: 0x0A) {
+                let message = syncBuffer[syncBuffer.startIndex..<newline]
+                syncBuffer.removeSubrange(syncBuffer.startIndex...newline)
+                health.handle(Data(message))
+            }
+        default:
+            break
         }
     }
 }

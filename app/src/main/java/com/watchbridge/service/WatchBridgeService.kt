@@ -35,6 +35,7 @@ import com.watchbridge.tile.ConnectionTileService
 import com.watchbridge.tile.MediaTileService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -53,6 +54,10 @@ class WatchBridgeService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val BLUETOOTH_OFF_NOTIFICATION_ID = 2
         private const val PHONE_BATTERY_NOTIFICATION_ID = 3
+        private const val PHONE_LOST_NOTIFICATION_ID = 7
+
+        /** Brief drops (reconnects, phone restarts) shouldn't buzz; a minute away is worth knowing. */
+        private const val PHONE_LOST_ALERT_DELAY_MS = 60_000L
         private const val WAKE_LOCK_TAG = "WatchBridge::BleConnection"
 
         /** Alert when the iPhone's battery drops to this level... */
@@ -214,6 +219,7 @@ class WatchBridgeService : Service() {
             sm.state.collect { state ->
                 lastStateChangeMs = System.currentTimeMillis()
                 if (state == ConnectionStateMachine.State.READY) LinkStats.onLinkUp() else LinkStats.onLinkDown()
+                watchForLostPhone(state)
                 // The service notification is posted once and never updated: Android won't let it
                 // be hidden, but it can be swiped away, and re-posting it on every state change
                 // would bring it back each time. Live status is on the tile and in the app.
@@ -420,6 +426,47 @@ class WatchBridgeService : Service() {
             .setOnlyAlertOnce(true)
             .build()
         nm.notify(BLUETOOTH_OFF_NOTIFICATION_ID, notification)
+    }
+
+    private var phoneLostJob: Job? = null
+    private var wasReady = false
+
+    /**
+     * After the link to the iPhone drops, wait a minute; if it's still gone, buzz once with a
+     * "Phone disconnected" notification. It goes away by itself on reconnect. Not for Bluetooth
+     * being off (that has its own alert) or a manual disconnect.
+     */
+    private fun watchForLostPhone(state: ConnectionStateMachine.State) {
+        val nm = getSystemService(android.app.NotificationManager::class.java)
+        if (state == ConnectionStateMachine.State.READY) {
+            wasReady = true
+            phoneLostJob?.cancel()
+            nm.cancel(PHONE_LOST_NOTIFICATION_ID)
+            return
+        }
+        val lost = wasReady && state != ConnectionStateMachine.State.BLUETOOTH_OFF &&
+            state != ConnectionStateMachine.State.IDLE
+        if (!lost || phoneLostJob?.isActive == true) return
+        phoneLostJob = serviceScope.launch {
+            delay(PHONE_LOST_ALERT_DELAY_MS)
+            if (settingsManager?.disconnectAlert?.value != true) return@launch
+            if (stateMachine?.state?.value == ConnectionStateMachine.State.READY) return@launch
+            val openApp = PendingIntent.getActivity(
+                this@WatchBridgeService, PHONE_LOST_NOTIFICATION_ID,
+                Intent(this@WatchBridgeService, MainActivity::class.java),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val notification = NotificationCompat.Builder(this@WatchBridgeService, WatchBridgeApp.CONNECTION_ALERTS_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_bluetooth_disabled)
+                .setContentTitle("Phone disconnected")
+                .setContentText("Notifications will resume when your iPhone is back in range")
+                .setContentIntent(openApp)
+                .setAutoCancel(true)
+                .setOnlyAlertOnce(true)
+                .build()
+            nm.notify(PHONE_LOST_NOTIFICATION_ID, notification)
+        }
+        if (state == ConnectionStateMachine.State.IDLE) wasReady = false
     }
 
     private fun showPhoneBatteryAlert(level: Int) {

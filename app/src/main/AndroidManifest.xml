@@ -46,6 +46,9 @@
     <!-- Sleep quiet mode: step counter to tell sleep from wake, Do Not Disturb, and turning off
          raise-to-wake. The last one can only be granted with adb (pm grant). -->
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <!-- Heart rate for Apple Health, collected passively by Health Services -->
+    <uses-permission android:name="android.permission.BODY_SENSORS" />
+    <uses-permission android:name="android.permission.BODY_SENSORS_BACKGROUND" />
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
     <uses-permission
         android:name="android.permission.WRITE_SECURE_SETTINGS"
@@ -151,6 +154,12 @@
         <receiver
             android:name=".update.UpdateInstallReceiver"
             android:exported="false" />
+
+        <!-- Health Services hands passive data batches to this service -->
+        <service
+            android:name=".health.PassiveHealthService"
+            android:exported="true"
+            android:permission="com.google.android.wearable.healthservices.permission.PASSIVE_DATA_BINDING" />
 
         <!-- Periodic sleep check (SleepGuard) -->
         <receiver

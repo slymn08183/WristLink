@@ -100,19 +100,45 @@ struct ContentView: View {
             case .notAsked:
                 Button("Allow Apple Health") { Task { await health.requestAccess() } }
             case .asked:
-                Label("Apple Health access set", systemImage: "heart.fill")
-                    .foregroundStyle(.pink)
+                HealthSyncRow(sync: link.health, pending: link.info?.pending) { link.syncHealth() }
             case .failed(let message):
                 Text("Apple Health: \(message)").foregroundStyle(.red)
             }
         } header: {
             Text("Apple Health")
         } footer: {
-            Text("Syncing steps, heart rate, sleep and workouts comes in the next version.")
+            Text("Steps, distance, heart rate and sleep from the watch. It syncs by itself when the watch has new data; workouts come later.")
         }
     }
 
     private static func formatDelay(_ ms: Int) -> String {
         ms < 1000 ? "under 1 s" : "\(Int((Double(ms) / 1000).rounded())) s"
+    }
+}
+
+/// Last sync, what's waiting on the watch, and a manual sync button.
+private struct HealthSyncRow: View {
+    @ObservedObject var sync: HealthSync
+    let pending: Int?
+    let onSync: () -> Void
+
+    var body: some View {
+        if sync.syncing {
+            Label("Syncing…", systemImage: "arrow.triangle.2.circlepath")
+        } else {
+            Button("Sync now", action: onSync)
+        }
+        if let pending {
+            LabeledContent("Waiting on the watch", value: "\(pending)")
+        }
+        if let lastSync = sync.lastSync {
+            LabeledContent("Last sync") {
+                Text(lastSync, style: .relative) + Text(" ago")
+            }
+            LabeledContent("Samples saved", value: "\(sync.lastCount)")
+        }
+        if let error = sync.lastError {
+            Text(error).foregroundStyle(.orange).font(.footnote)
+        }
     }
 }

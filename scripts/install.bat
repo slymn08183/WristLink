@@ -233,6 +233,8 @@ if not errorlevel 1 echo   [OK] Exempt from battery optimization
 
 REM "Quiet while asleep": step counter, Do Not Disturb, and turning off raise-to-wake.
 adb -s !CONN_ADDR! shell pm grant %PACKAGE% android.permission.ACTIVITY_RECOGNITION >nul 2>&1
+REM Heart rate for Apple Health (Wear OS 6 also needs the health.* names)
+for %%P in (BODY_SENSORS BODY_SENSORS_BACKGROUND health.READ_HEART_RATE health.READ_HEALTH_DATA_IN_BACKGROUND) do adb -s !CONN_ADDR! shell pm grant %PACKAGE% android.permission.%%P >nul 2>&1
 adb -s !CONN_ADDR! shell cmd notification allow_dnd %PACKAGE% >nul 2>&1
 adb -s !CONN_ADDR! shell pm grant %PACKAGE% android.permission.WRITE_SECURE_SETTINGS >nul 2>&1
 if not errorlevel 1 echo   [OK] Sleep quiet mode can manage Do Not Disturb and raise-to-wake

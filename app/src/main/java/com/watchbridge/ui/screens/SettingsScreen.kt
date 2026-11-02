@@ -55,6 +55,7 @@ fun SettingsScreen(settings: SettingsManager, onOpenStats: () -> Unit) {
     val phoneBatteryAlert by settings.phoneBatteryAlert.collectAsState()
     val statusNotification by settings.statusNotification.collectAsState()
     val sleepGuard by settings.sleepGuard.collectAsState()
+    val disconnectAlert by settings.disconnectAlert.collectAsState()
 
     val categoryFilters = settings.getAllCategoryFilters()
     val listState = rememberScalingLazyListState()
@@ -241,6 +242,15 @@ fun SettingsScreen(settings: SettingsManager, onOpenStats: () -> Unit) {
                 item {
                     HintText("For call audio, tap this watch once in the phone's Bluetooth settings")
                 }
+            }
+
+            item {
+                SettingsToggle(
+                    label = "Disconnect alert",
+                    secondaryLabel = "Buzz when the iPhone is gone for a minute",
+                    checked = disconnectAlert,
+                    onCheckedChange = { settings.setDisconnectAlert(it) }
+                )
             }
 
             item {
