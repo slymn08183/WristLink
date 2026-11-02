@@ -80,11 +80,26 @@ object WeatherStore {
         fun hoursAfter(at: Long, count: Int): List<Hour> =
             hours.filter { it.time > at }.take(count)
 
+        private val sunEvents: List<SunEvent> by lazy {
+            days.flatMap { listOf(SunEvent(it.sunrise, true), SunEvent(it.sunset, false)) }.sortedBy { it.time }
+        }
+
         /** The next sunrise or sunset after [at]. */
-        fun nextSunEvent(at: Long): SunEvent? =
-            days.flatMap { listOf(SunEvent(it.sunrise, true), SunEvent(it.sunset, false)) }
-                .filter { it.time > at }
-                .minByOrNull { it.time }
+        fun nextSunEvent(at: Long): SunEvent? = sunEvents.firstOrNull { it.time > at }
+
+        /**
+         * How far [at] is from the last sunrise or sunset to the next one, 0 to 1: the day's
+         * progress in daylight, the night's in the dark. Before the first event in the forecast
+         * the night is assumed to have started at the previous day's sunset.
+         */
+        fun sunProgress(at: Long): Float? {
+            val next = nextSunEvent(at) ?: return null
+            val previous = sunEvents.lastOrNull { it.time <= at }?.time
+                ?: day(next.time)?.let { if (next.isSunrise) it.sunset - DAY_MS else it.sunrise }
+                ?: return null
+            val span = next.time - previous
+            return if (span <= 0) null else ((at - previous).toFloat() / span).coerceIn(0f, 1f)
+        }
 
         /** When this forecast stops saying anything useful about "now". */
         val validUntil: Long

@@ -7,6 +7,7 @@ import androidx.wear.watchface.complications.data.LongTextComplicationData
 import androidx.wear.watchface.complications.data.MonochromaticImage
 import androidx.wear.watchface.complications.data.NoDataComplicationData
 import androidx.wear.watchface.complications.data.PlainComplicationText
+import androidx.wear.watchface.complications.data.RangedValueComplicationData
 import androidx.wear.watchface.complications.data.ShortTextComplicationData
 import androidx.wear.watchface.complications.datasource.ComplicationDataTimeline
 import androidx.wear.watchface.complications.datasource.ComplicationRequest
@@ -16,8 +17,9 @@ import androidx.wear.watchface.complications.datasource.TimelineEntry
 import java.time.Instant
 
 /**
- * Current weather on the watch face: "18°" with an icon and today's high/low (short), or
- * "18° Partly cloudy" with the place (long).
+ * Current weather on the watch face: "18°" with an icon and today's high/low (short), "18° Partly
+ * cloudy" with the place (long), or the temperature as an arc between today's low and high
+ * (ranged, the type Samsung's edge slots ask for).
  *
  * The data comes from the iPhone (WeatherStore). Rather than waking up every hour, it hands the
  * face a timeline with an entry for each coming hour of the forecast.
@@ -45,18 +47,22 @@ class WeatherComplicationService : SuspendingTimelineComplicationDataSourceServi
 
     override fun getPreviewData(type: ComplicationType): ComplicationData? =
         build(type, temp = "18°", sky = "Partly cloudy", range = "21°/12°", place = "Your city",
-            icon = Sky.icon(2, isDay = true))
+            icon = Sky.icon(2, isDay = true), value = 18.0, low = 12.0, high = 21.0)
 
     private fun data(type: ComplicationType, forecast: WeatherStore.Forecast, at: Long): ComplicationData? {
         val conditions = forecast.conditions(at) ?: return null
-        val range = forecast.day(at)?.let { "${forecast.formatTemp(it.max)}/${forecast.formatTemp(it.min)}" }
+        val today = forecast.day(at)
+        val range = today?.let { "${forecast.formatTemp(it.max)}/${forecast.formatTemp(it.min)}" }
         return build(
             type,
             temp = forecast.formatTemp(conditions.temp),
             sky = Sky.label(conditions.code, conditions.isDay),
             range = range,
             place = forecast.place,
-            icon = Sky.icon(conditions.code, conditions.isDay)
+            icon = Sky.icon(conditions.code, conditions.isDay),
+            value = conditions.temp,
+            low = today?.min,
+            high = today?.max
         )
     }
 
@@ -66,11 +72,23 @@ class WeatherComplicationService : SuspendingTimelineComplicationDataSourceServi
         sky: String,
         range: String?,
         place: String?,
-        icon: Int
+        icon: Int,
+        value: Double,
+        low: Double?,
+        high: Double?
     ): ComplicationData? {
         val image = MonochromaticImage.Builder(Icon.createWithResource(this, icon)).build()
         val description = text("$temp, $sky")
         return when (type) {
+            ComplicationType.RANGED_VALUE -> {
+                // The hour's forecast can stray outside the day's range; keep the arc sane
+                val min = minOf(low ?: value, value).toFloat()
+                val max = maxOf(high ?: value, value, min + 1.0).toFloat()
+                RangedValueComplicationData.Builder(value.toFloat(), min, max, description)
+                    .setText(text(temp))
+                    .setMonochromaticImage(image)
+                    .build()
+            }
             ComplicationType.SHORT_TEXT -> ShortTextComplicationData.Builder(text(temp), description)
                 .setMonochromaticImage(image)
                 .apply { if (range != null) setTitle(text(range)) }
