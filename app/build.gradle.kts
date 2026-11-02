@@ -105,5 +105,9 @@ dependencies {
     // Weather and sunrise/sunset complications
     implementation(libs.wear.complications.data.source.ktx)
 
+    // WristLink watch face
+    implementation(libs.wear.watchface)
+    implementation(libs.wear.watchface.complications.rendering)
+
     testImplementation(libs.junit)
 }

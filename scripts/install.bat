@@ -236,6 +236,8 @@ adb -s !CONN_ADDR! shell pm grant %PACKAGE% android.permission.ACTIVITY_RECOGNIT
 REM Heart rate for Apple Health (Wear OS 6 also needs the health.* names)
 for %%P in (BODY_SENSORS BODY_SENSORS_BACKGROUND health.READ_HEART_RATE health.READ_HEALTH_DATA_IN_BACKGROUND) do adb -s !CONN_ADDR! shell pm grant %PACKAGE% android.permission.%%P >nul 2>&1
 adb -s !CONN_ADDR! shell cmd notification allow_dnd %PACKAGE% >nul 2>&1
+REM WristLink watch faces showing other apps' data (Samsung Health heart rate, blood oxygen)
+adb -s !CONN_ADDR! shell pm grant %PACKAGE% com.google.android.wearable.permission.RECEIVE_COMPLICATION_DATA >nul 2>&1
 REM Watch settings (display, wake, sleep quiet mode) changed from the watch app and the iPhone app
 adb -s !CONN_ADDR! shell appops set %PACKAGE% WRITE_SETTINGS allow >nul 2>&1
 adb -s !CONN_ADDR! shell pm grant %PACKAGE% android.permission.WRITE_SECURE_SETTINGS >nul 2>&1

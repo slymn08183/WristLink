@@ -296,6 +296,8 @@ for p in BODY_SENSORS BODY_SENSORS_BACKGROUND health.READ_HEART_RATE health.READ
   adb -s "$CONN_ADDR" shell pm grant "$PACKAGE" "android.permission.$p" >/dev/null 2>&1
 done
 adb -s "$CONN_ADDR" shell cmd notification allow_dnd "$PACKAGE" >/dev/null 2>&1
+# WristLink watch faces showing other apps' data (Samsung Health heart rate, blood oxygen)
+adb -s "$CONN_ADDR" shell pm grant "$PACKAGE" com.google.android.wearable.permission.RECEIVE_COMPLICATION_DATA >/dev/null 2>&1
 # Watch settings (display, wake, sleep quiet mode) changed from the watch app and the iPhone app
 adb -s "$CONN_ADDR" shell appops set "$PACKAGE" WRITE_SETTINGS allow >/dev/null 2>&1
 adb -s "$CONN_ADDR" shell pm grant "$PACKAGE" android.permission.WRITE_SECURE_SETTINGS >/dev/null 2>&1 \

@@ -23,4 +23,15 @@
     <string name="weather_tile_label">Weather</string>
     <string name="weather_complication_label">Weather</string>
     <string name="sun_complication_label">Sunrise &amp; sunset</string>
+    <string name="watch_face_name">WristLink</string>
+    <string name="watch_face_theme">Color</string>
+    <string name="watch_face_theme_description">Accent color for the date, weather icon and slots</string>
+    <string name="watch_face_dashboard_name">WristLink Dashboard</string>
+    <string name="watch_face_theme_colorful">Colorful</string>
+    <string name="watch_face_theme_blue">Blue</string>
+    <string name="watch_face_theme_violet">Violet</string>
+    <string name="watch_face_theme_mint">Mint</string>
+    <string name="watch_face_theme_amber">Amber</string>
+    <string name="watch_face_theme_coral">Coral</string>
+    <string name="watch_face_theme_white">White</string>
 </resources>

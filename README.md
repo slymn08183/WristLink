@@ -25,12 +25,27 @@ other wearables do, and adds an iPhone companion app for what iOS doesn't share 
 | Quiet while asleep: Do Not Disturb and no raise-to-wake while the watch sees you sleep | No |
 | Watch battery and stats on the iPhone, and every WristLink setting | Yes |
 | Weather and sunrise/sunset: a tile, and complications for any watch face that takes them | Yes |
+| Two WristLink watch faces with the weather built in (see below) | Weather: yes |
 | Apple Health sync (steps, heart rate, sleep, ...) | Yes, [in progress](#roadmap) |
 
 Not possible on iPhone for any third-party watch: replying to messages, call history, Apple Pay.
 
 Tested on a **Galaxy Watch4 Classic (SM-R890), One UI 8 Watch / Wear OS 6**, with an iPhone on iOS 26.
 Should work on other Galaxy and Wear OS watches.
+
+## Watch faces
+
+WristLink comes with two watch faces; pick them in the watch face list like any other.
+
+| WristLink Dashboard | WristLink |
+|---|---|
+| <img src="docs/screenshots/watch-face-dashboard.png" width="220"> | <img src="docs/screenshots/watch-face-simple.png" width="220"> |
+
+**Dashboard** has four gauges around the rim (steps, battery, heart rate and blood oxygen to
+start with), the weather from the iPhone with today's high and low at the top, and the next
+sunrise or sunset under the time. Touch and hold it to pick other data for the gauges and the
+slot, or a single accent color. **WristLink** is the quieter one: the time, the weather and two
+round slots. Both draw only once a second with the screen on and once a minute on Always On.
 
 ## Install
 

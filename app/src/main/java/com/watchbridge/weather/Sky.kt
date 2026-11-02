@@ -38,6 +38,16 @@ object Sky {
         else -> R.drawable.ic_weather_cloud
     }
 
+    /** A color for the icon where it can have one: warm sun, pale cloud, blue rain. */
+    fun tint(code: Int, isDay: Boolean): Int = when (code) {
+        0, 1, 2 -> if (isDay) 0xFFFFC857.toInt() else 0xFFD6DEFF.toInt()
+        3, 45, 48 -> 0xFFB8D4FF.toInt()
+        in 51..67, 80, 81, 82 -> 0xFF6EC6FF.toInt()
+        in 71..77, 85, 86 -> 0xFFFFFFFF.toInt()
+        in 95..99 -> 0xFFFFC857.toInt()
+        else -> 0xFFB8D4FF.toInt()
+    }
+
     /** Every icon, for tiles that must list their images up front. */
     val allIcons: List<Int> = listOf(
         R.drawable.ic_weather_sun, R.drawable.ic_weather_moon,

@@ -61,6 +61,9 @@ health-services-client = { group = "androidx.health", name = "health-services-cl
 
 # Watch face complications (weather and sunrise/sunset from the iPhone)
 wear-complications-data-source-ktx = { group = "androidx.wear.watchface", name = "watchface-complications-data-source-ktx", version.ref = "complications" }
+# The WristLink watch face, shipped inside the app
+wear-watchface = { group = "androidx.wear.watchface", name = "watchface", version.ref = "complications" }
+wear-watchface-complications-rendering = { group = "androidx.wear.watchface", name = "watchface-complications-rendering", version.ref = "complications" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
