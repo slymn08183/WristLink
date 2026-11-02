@@ -27,6 +27,7 @@ class SettingsManager(context: Context) {
         private const val KEY_CALLS_ON_WATCH = "calls_on_watch"
         private const val KEY_PHONE_BATTERY_ALERT = "phone_battery_alert"
         private const val KEY_STATUS_NOTIFICATION = "status_notification"
+        private const val KEY_SLEEP_GUARD = "sleep_guard"
         private const val KEY_CALL_PERMISSIONS_ASKED = "call_permissions_asked"
         private const val KEY_CATEGORY_PREFIX = "category_enabled_"
     }
@@ -142,6 +143,19 @@ class SettingsManager(context: Context) {
     fun setStatusNotification(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_STATUS_NOTIFICATION, enabled).apply()
         _statusNotification.value = enabled
+    }
+
+    private val _sleepGuard = MutableStateFlow(prefs.getBoolean(KEY_SLEEP_GUARD, false))
+
+    /** Quiet the watch automatically while asleep (see SleepGuard). */
+    val sleepGuard: StateFlow<Boolean> = _sleepGuard.asStateFlow()
+
+    val isSleepGuardEnabled: Boolean
+        get() = prefs.getBoolean(KEY_SLEEP_GUARD, false)
+
+    fun setSleepGuard(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_SLEEP_GUARD, enabled).apply()
+        _sleepGuard.value = enabled
     }
 
     fun setShowPhoneInfo(enabled: Boolean) {

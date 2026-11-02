@@ -38,6 +38,7 @@ import com.watchbridge.ancs.AncsConstants
 import com.watchbridge.diagnostics.LinkStats
 import com.watchbridge.notification.NotificationIcons
 import com.watchbridge.settings.SettingsManager
+import com.watchbridge.sleep.SleepGuard
 import com.watchbridge.ui.components.WatchBridgeScaffold
 import com.watchbridge.call.WatchCalls
 import com.watchbridge.update.AppUpdater
@@ -53,6 +54,7 @@ fun SettingsScreen(settings: SettingsManager, onOpenStats: () -> Unit) {
     val callsOnWatch by settings.callsOnWatch.collectAsState()
     val phoneBatteryAlert by settings.phoneBatteryAlert.collectAsState()
     val statusNotification by settings.statusNotification.collectAsState()
+    val sleepGuard by settings.sleepGuard.collectAsState()
 
     val categoryFilters = settings.getAllCategoryFilters()
     val listState = rememberScalingLazyListState()
@@ -239,6 +241,23 @@ fun SettingsScreen(settings: SettingsManager, onOpenStats: () -> Unit) {
                 item {
                     HintText("For call audio, tap this watch once in the phone's Bluetooth settings")
                 }
+            }
+
+            item {
+                SettingsToggle(
+                    label = "Quiet while asleep",
+                    secondaryLabel = when {
+                        !sleepGuard -> "DND and no wrist wake at night"
+                        !SleepGuard.hasControl(context) -> "Needs permissions via adb"
+                        SleepGuard.isAsleep(context) -> "On · you're asleep now"
+                        else -> "On · 22:00–10:00 when still"
+                    },
+                    checked = sleepGuard,
+                    onCheckedChange = {
+                        settings.setSleepGuard(it)
+                        SleepGuard.schedule(context)
+                    }
+                )
             }
 
             item {

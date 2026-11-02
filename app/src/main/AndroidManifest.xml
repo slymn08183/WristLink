@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- BLE permissions -->
     <uses-permission android:name="android.permission.BLUETOOTH" />
@@ -41,6 +42,14 @@
     <uses-permission
         android:name="android.permission.SCHEDULE_EXACT_ALARM"
         android:maxSdkVersion="32" />
+
+    <!-- Sleep quiet mode: step counter to tell sleep from wake, Do Not Disturb, and turning off
+         raise-to-wake. The last one can only be granted with adb (pm grant). -->
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+    <uses-permission
+        android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
 
     <!-- Declare BLE feature -->
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
@@ -141,6 +150,11 @@
 
         <receiver
             android:name=".update.UpdateInstallReceiver"
+            android:exported="false" />
+
+        <!-- Periodic sleep check (SleepGuard) -->
+        <receiver
+            android:name=".sleep.SleepGuardReceiver"
             android:exported="false" />
 
         <!-- Buttons on the now playing notification -->

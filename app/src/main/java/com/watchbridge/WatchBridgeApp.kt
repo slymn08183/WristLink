@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import com.watchbridge.notification.NotificationChannels
 import com.watchbridge.settings.SettingsManager
+import com.watchbridge.sleep.SleepGuard
 
 class WatchBridgeApp : Application() {
 
@@ -20,6 +21,7 @@ class WatchBridgeApp : Application() {
         super.onCreate()
         createServiceChannel()
         NotificationChannels.createAll(this, vibrate = SettingsManager(this).isVibrationEnabled)
+        SleepGuard.schedule(this)
     }
 
     private fun createServiceChannel() {
