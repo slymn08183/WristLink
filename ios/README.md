@@ -10,6 +10,36 @@ installs it.
 
 ## Install (Windows, no Mac)
 
+Three ways, from most to least automatic. With a free Apple ID every sideloaded app expires
+after 7 days and must be refreshed; only a paid developer account ($99/year) makes that a year.
+
+### SideStore (recommended): refreshes and updates on the iPhone itself
+
+After a one-time setup with a computer, SideStore re-signs apps on the iPhone, so the 7-day
+refresh needs no computer, and WristLink updates install from the iPhone.
+
+1. On the PC install iTunes (from apple.com) and [iloader](https://github.com/nab138/iloader)
+   (only from its GitHub page or iloader.app).
+2. On the iPhone install **LocalDevVPN** from the App Store, and turn on
+   **Settings → Privacy & Security → Developer Mode**.
+3. Connect the iPhone by cable, open iloader, sign in with your Apple ID and choose
+   **Install SideStore**. It also places the pairing file SideStore needs.
+4. On the iPhone: **Settings → General → VPN & Device Management** → trust your Apple ID.
+5. Open LocalDevVPN → **Connect**, then SideStore → **Sources → +** and add
+   `https://github.com/slymn08183/WristLink/releases/download/ios-latest/source.json`.
+   Install WristLink from there.
+6. Every few days (before 7 are up): LocalDevVPN → Connect, SideStore → **Refresh All**. New
+   WristLink builds show up in SideStore as updates.
+
+If you update or reset the iPhone, the pairing file may stop working; run iloader again.
+
+### Sideloadly: simplest, but needs the computer every 7 days
+
+Install [Sideloadly](https://sideloadly.io), connect the iPhone, drop in `WristLink.ipa` from the
+[latest build](https://github.com/slymn08183/WristLink/releases/tag/ios-latest), sign in, Start.
+
+### AltStore Classic
+
 One-time setup, about 15 minutes:
 
 1. On the PC, install **iTunes** and **iCloud** from Apple's website (not the Microsoft Store

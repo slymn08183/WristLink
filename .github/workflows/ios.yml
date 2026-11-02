@@ -42,6 +42,7 @@ jobs:
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -derivedDataPath build \
+            MARKETING_VERSION="0.1.${GITHUB_RUN_NUMBER}" CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER}" \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build | tail -40
 
@@ -51,6 +52,49 @@ jobs:
           mkdir -p Payload
           cp -R build/Build/Products/Release-iphoneos/WristLink.app Payload/
           zip -qry WristLink.ipa Payload
+
+      # A SideStore/AltStore source: add its URL once in the app and new builds show up as updates
+      # that install on the iPhone itself, no computer needed
+      - name: Write source.json
+        working-directory: ios
+        run: |
+          python3 - <<'PY'
+          import datetime, json, os
+          run = os.environ["GITHUB_RUN_NUMBER"]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          base = f"https://github.com/{repo}/releases/download/ios-latest"
+          source = {
+              "name": "WristLink",
+              "identifier": "io.github.slymn08183.wristlink.source",
+              "subtitle": "Galaxy Watch on iPhone",
+              "website": f"https://github.com/{repo}",
+              "apps": [{
+                  "name": "WristLink",
+                  "bundleIdentifier": "io.github.slymn08183.wristlink",
+                  "developerName": "slymn08183",
+                  "subtitle": "Galaxy Watch companion",
+                  "localizedDescription": "Watch info, settings and Apple Health sync for a Samsung Galaxy Watch running WristLink.",
+                  "iconURL": f"https://raw.githubusercontent.com/{repo}/master/docs/social-preview.png",
+                  "versions": [{
+                      "version": f"0.1.{run}",
+                      "buildVersion": run,
+                      "date": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                      "downloadURL": f"{base}/WristLink.ipa",
+                      "size": os.path.getsize("WristLink.ipa"),
+                      "minOSVersion": "17.0",
+                  }],
+                  "appPermissions": {
+                      "entitlements": ["com.apple.developer.healthkit"],
+                      "privacy": {
+                          "NSBluetoothAlwaysUsageDescription": "Talks to your Galaxy Watch over Bluetooth.",
+                          "NSHealthUpdateUsageDescription": "Saves steps, heart rate and sleep from your watch.",
+                      },
+                  },
+              }],
+              "news": [],
+          }
+          json.dump(source, open("source.json", "w"), indent=2)
+          PY
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -65,7 +109,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release delete ios-latest --yes --cleanup-tag || true
-          gh release create ios-latest ios/WristLink.ipa \
+          gh release create ios-latest ios/WristLink.ipa ios/source.json \
             --prerelease \
             --title "WristLink for iPhone (latest build)" \
-            --notes "Unsigned build of ${GITHUB_SHA::7}. Install it with AltStore or SideStore; see ios/README.md."
+            --notes "Build ${GITHUB_RUN_NUMBER} (${GITHUB_SHA::7}), unsigned. Install with SideStore or AltStore; see ios/README.md. Source URL: https://github.com/${GITHUB_REPOSITORY}/releases/download/ios-latest/source.json"

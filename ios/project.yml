@@ -14,8 +14,8 @@ targets:
       path: WristLink/Info.plist
       properties:
         CFBundleDisplayName: WristLink
-        CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "1"
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
@@ -35,6 +35,9 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.slymn08183.wristlink
         SWIFT_VERSION: "5.0"
+        # CI overrides both with the run number, so SideStore/AltStore see every build as an update
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
         TARGETED_DEVICE_FAMILY: "1"
         # Built unsigned in CI; AltStore/SideStore signs it with the user's own Apple ID on install
         CODE_SIGN_STYLE: Manual
