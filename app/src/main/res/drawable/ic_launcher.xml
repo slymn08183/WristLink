@@ -1,17 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Monochrome WristLink glyph (watch in front of a phone) for notification small icons, actions
+     and tile previews; the system tints it. The launcher icon is @mipmap/ic_launcher, rendered from
+     docs/brand/wristlink-icon.svg. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="48dp"
-    android:height="48dp"
-    android:viewportWidth="48"
-    android:viewportHeight="48">
-    <!-- Bridge icon: two arcs connected -->
-    <path
-        android:fillColor="#4FC3F7"
-        android:pathData="M24,8C13.5,8 5,16.5 5,27v5h6v-5c0,-7.2 5.8,-13 13,-13s13,5.8 13,13v5h6v-5C43,16.5 34.5,8 24,8z" />
-    <path
-        android:fillColor="#29B6F6"
-        android:pathData="M24,16c-6.1,0 -11,4.9 -11,11v5h6v-5c0,-2.8 2.2,-5 5,-5s5,2.2 5,5v5h6v-5C35,20.9 30.1,16 24,16z" />
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- phone outline -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M24,28m-3,0a3,3 0,1 1,6 0a3,3 0,1 1,-6 0" />
+        android:fillType="evenOdd"
+        android:pathData="M15.5,2.5h3A2.5,2.5 0,0 1,21 5v14a2.5,2.5 0,0 1,-2.5 2.5h-3A2.5,2.5 0,0 1,13 19V5A2.5,2.5 0,0 1,15.5 2.5zM15.5,4.3a0.7,0.7 0,0 0,-0.7 0.7v14c0,0.39 0.31,0.7 0.7,0.7h3c0.39,0 0.7,-0.31 0.7,-0.7V5a0.7,0.7 0,0 0,-0.7 -0.7z" />
+    <!-- watch: straps and case, with the face cut out -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M6.2,4.5h3.6l0.6,2.7A6,6 0,0 1,14 12.5a6,6 0,0 1,-3.6 5.3l-0.6,2.7H6.2l-0.6,-2.7A6,6 0,0 1,2 12.5a6,6 0,0 1,3.6 -5.3zM8,9a3.5,3.5 0,1 0,0 7a3.5,3.5 0,1 0,0 -7z" />
 </vector>

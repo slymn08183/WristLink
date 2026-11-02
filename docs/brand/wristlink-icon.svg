@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2D5BD3"/>
+      <stop offset="0.5" stop-color="#18215A"/>
+      <stop offset="1" stop-color="#2B1C68"/>
+    </linearGradient>
+    <radialGradient id="light" cx="0.18" cy="0.12" r="0.75">
+      <stop offset="0" stop-color="#5B8CFF" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#5B8CFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="orbit" gradientUnits="userSpaceOnUse" x1="110" y1="0" x2="940" y2="0">
+      <stop offset="0" stop-color="#38BDF8"/>
+      <stop offset="0.5" stop-color="#4F7BF7"/>
+      <stop offset="1" stop-color="#A06CFA"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#22307A"/>
+      <stop offset="1" stop-color="#10163C"/>
+    </linearGradient>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F6F8FF"/>
+      <stop offset="1" stop-color="#D3DDF8"/>
+    </linearGradient>
+    <radialGradient id="face" cx="0.4" cy="0.35" r="0.75">
+      <stop offset="0" stop-color="#1B2456"/>
+      <stop offset="1" stop-color="#0B1030"/>
+    </radialGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="22"/>
+    </filter>
+    <filter id="glow" x="-20%" y="-60%" width="140%" height="220%">
+      <feGaussianBlur stdDeviation="14"/>
+    </filter>
+    <!-- the far (upper) half of the orbit fades as it goes behind the watch and phone -->
+    <linearGradient id="fadeGrad" gradientUnits="userSpaceOnUse" x1="0" y1="500" x2="0" y2="690">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="1"/>
+    </linearGradient>
+    <mask id="fade" maskUnits="userSpaceOnUse" x="0" y="400" width="1100" height="420">
+      <rect x="0" y="400" width="1100" height="420" fill="url(#fadeGrad)"/>
+    </mask>
+    <!-- the orbit passes in front of the phone only where it crosses the phone body, on its near
+         (lower) half; everywhere else the copy drawn behind shows, so there are no seams -->
+    <clipPath id="phoneBody" clipPathUnits="userSpaceOnUse">
+      <rect x="540" y="230" width="280" height="560" rx="66"/>
+    </clipPath>
+    <clipPath id="nearHalf" clipPathUnits="userSpaceOnUse">
+      <rect x="0" y="640" width="1100" height="320"/>
+    </clipPath>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <rect width="1024" height="1024" fill="url(#light)"/>
+
+  <!-- orbit: a band between two offset ellipses, thick at the near left, thin at the far right.
+       Drawn whole behind everything, then its near (lower right) part again over the phone. -->
+  <g transform="rotate(-15 520 640)" mask="url(#fade)">
+    <path id="band" fill="url(#orbit)" fill-rule="evenodd"
+          d="M 100 640 a 420 132 0 1 0 840 0 a 420 132 0 1 0 -840 0 Z M 160 625 a 380 96 0 1 0 760 0 a 380 96 0 1 0 -760 0 Z"/>
+    <use href="#band" opacity="0.45" filter="url(#glow)"/>
+  </g>
+
+  <!-- phone: shadow, body, screen with a soft sheen, dynamic island -->
+  <rect x="556" y="262" width="280" height="560" rx="66" fill="#050820" opacity="0.55" filter="url(#shadow)"/>
+  <rect x="540" y="230" width="280" height="560" rx="66" fill="url(#body)"/>
+  <rect x="566" y="256" width="228" height="508" rx="44" fill="url(#screen)"/>
+  <path d="M 566 520 L 794 330 L 794 420 L 566 610 Z" fill="#FFFFFF" opacity="0.06"/>
+  <rect x="640" y="276" width="80" height="22" rx="11" fill="#070B24"/>
+
+  <g clip-path="url(#phoneBody)">
+    <g transform="rotate(-15 520 640)" clip-path="url(#nearHalf)">
+      <use href="#band" opacity="0.45" filter="url(#glow)"/>
+      <use href="#band"/>
+    </g>
+  </g>
+
+  <!-- watch: soft shadow on the phone, lugs flaring into the case, case, bezel, face, signal -->
+  <circle cx="414" cy="590" r="178" fill="#050820" opacity="0.6" filter="url(#shadow)"/>
+  <path d="M 344 330 H 436 Q 456 330 458 350 L 470 440 H 310 L 322 350 Q 324 330 344 330 Z" fill="url(#body)"/>
+  <path d="M 344 790 H 436 Q 456 790 458 770 L 470 680 H 310 L 322 770 Q 324 790 344 790 Z" fill="url(#body)"/>
+  <circle cx="390" cy="560" r="170" fill="url(#body)"/>
+  <circle cx="390" cy="560" r="144" fill="none" stroke="#C0CBEC" stroke-width="6"/>
+  <circle cx="390" cy="560" r="130" fill="url(#face)"/>
+  <g fill="none" stroke="#3FE0F0" stroke-width="26" stroke-linecap="round">
+    <path d="M 319.3 549.3 A 100 100 0 0 1 460.7 549.3"/>
+    <path d="M 349 579 A 58 58 0 0 1 431 579"/>
+  </g>
+  <circle cx="390" cy="620" r="17" fill="#3FE0F0"/>
+</svg>

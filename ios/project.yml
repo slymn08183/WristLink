@@ -40,6 +40,7 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         TARGETED_DEVICE_FAMILY: "1"
         # Built unsigned in CI; AltStore/SideStore signs it with the user's own Apple ID on install
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_STYLE: Manual
         CODE_SIGNING_ALLOWED: NO
 schemes:

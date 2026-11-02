@@ -85,7 +85,7 @@ jobs:
                   "developerName": "slymn08183",
                   "subtitle": "Galaxy Watch companion",
                   "localizedDescription": "Watch info, settings and Apple Health sync for a Samsung Galaxy Watch running WristLink.",
-                  "iconURL": f"https://raw.githubusercontent.com/{repo}/master/docs/social-preview.png",
+                  "iconURL": f"https://raw.githubusercontent.com/{repo}/master/docs/brand/app-icon-1024.png",
                   "versions": [{
                       "version": f"0.1.{run}",
                       "buildVersion": run,
