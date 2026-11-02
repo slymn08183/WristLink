@@ -27,6 +27,7 @@
     <string name="watch_face_theme">Color</string>
     <string name="watch_face_theme_description">Accent color for the date, weather icon and slots</string>
     <string name="watch_face_dashboard_name">WristLink Dashboard</string>
+    <string name="watch_face_editor">Customize</string>
     <string name="watch_face_theme_colorful">Colorful</string>
     <string name="watch_face_theme_blue">Blue</string>
     <string name="watch_face_theme_violet">Violet</string>

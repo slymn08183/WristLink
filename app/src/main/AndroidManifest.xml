@@ -280,6 +280,10 @@
             <meta-data
                 android:name="android.service.wallpaper"
                 android:resource="@xml/watch_face" />
+            <!-- "Customize" opens FaceEditorActivity -->
+            <meta-data
+                android:name="com.google.android.wearable.watchface.wearableConfigurationAction"
+                android:value="androidx.wear.watchface.editor.action.WATCH_FACE_EDITOR" />
         </service>
 
         <!-- The WristLink Dashboard face: four rim gauges, the time, a weather card -->
@@ -301,7 +305,24 @@
             <meta-data
                 android:name="android.service.wallpaper"
                 android:resource="@xml/watch_face" />
+            <!-- "Customize" opens FaceEditorActivity -->
+            <meta-data
+                android:name="com.google.android.wearable.watchface.wearableConfigurationAction"
+                android:value="androidx.wear.watchface.editor.action.WATCH_FACE_EDITOR" />
         </service>
+
+        <!-- Editor for both WristLink faces: their slots and accent color -->
+        <activity
+            android:name=".watchface.FaceEditorActivity"
+            android:exported="true"
+            android:label="@string/watch_face_editor"
+            android:taskAffinity="">
+            <intent-filter>
+                <action android:name="androidx.wear.watchface.editor.action.WATCH_FACE_EDITOR" />
+                <category android:name="com.google.android.wearable.watchface.category.WEARABLE_CONFIGURATION" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
 
         <!-- End-of-rest buzz, fired by AlarmManager so it survives doze and app death -->
         <receiver

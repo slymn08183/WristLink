@@ -64,6 +64,7 @@ wear-complications-data-source-ktx = { group = "androidx.wear.watchface", name =
 # The WristLink watch face, shipped inside the app
 wear-watchface = { group = "androidx.wear.watchface", name = "watchface", version.ref = "complications" }
 wear-watchface-complications-rendering = { group = "androidx.wear.watchface", name = "watchface-complications-rendering", version.ref = "complications" }
+wear-watchface-editor = { group = "androidx.wear.watchface", name = "watchface-editor", version.ref = "complications" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

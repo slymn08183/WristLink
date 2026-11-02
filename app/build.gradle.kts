@@ -108,6 +108,7 @@ dependencies {
     // WristLink watch face
     implementation(libs.wear.watchface)
     implementation(libs.wear.watchface.complications.rendering)
+    implementation(libs.wear.watchface.editor)
 
     testImplementation(libs.junit)
 }
