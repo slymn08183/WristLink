@@ -12,8 +12,6 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import androidx.core.app.Person
-import androidx.core.graphics.drawable.IconCompat
 import com.watchbridge.R
 import com.watchbridge.ancs.AncsAttributeParser
 import com.watchbridge.ancs.AncsConstants
@@ -27,8 +25,8 @@ import com.watchbridge.settings.SettingsManager
  *
  * - Notifications are grouped per iPhone app (bundle ID), so ten WhatsApp messages stack
  *   into one WhatsApp group instead of ten loose cards.
- * - Chats (Social category with a sender and a message) use MessagingStyle: every message
- *   of one conversation shares a single notification in the native Wear OS chat layout.
+ * - Chats (Social category with a sender and a message): every message of one conversation
+ *   shares a single notification, newest message on top.
  */
 class NotificationRenderer(
     private val context: Context,
@@ -41,8 +39,8 @@ class NotificationRenderer(
         private const val NOTIFICATION_ID_OFFSET = 1000
         private const val GROUP_PREFIX = "ios:"
 
-        /** MessagingStyle only keeps the latest 25 messages anyway. */
-        private const val MAX_MESSAGES_SHOWN = 25
+        /** Older messages of a busy chat are still on the iPhone; the watch keeps it short. */
+        private const val MAX_MESSAGES_SHOWN = 10
     }
 
     private val notificationManager =
@@ -191,7 +189,7 @@ class NotificationRenderer(
         if (appIcon != null) {
             builder.setLargeIcon(appIcon)
         }
-        if (appDisplayName != null && appDisplayName != title) {
+        if (appDisplayName != null && !sameName(appDisplayName, title)) {
             builder.setSubText(appDisplayName)
         }
         if (group != null) {
@@ -259,31 +257,23 @@ class NotificationRenderer(
             .takeLast(MAX_MESSAGES_SHOWN)
         val latest = messages.last()
 
-        // The app icon doubles as the sender avatar, so every chat shows which app it's from
-        val avatar = group.appIcon?.let { IconCompat.createWithBitmap(it) }
-        val people = mutableMapOf<String, Person>()
-        fun personFor(name: String) = people.getOrPut(name) {
-            Person.Builder().setName(name).setKey("${group.key}|$name").setIcon(avatar).build()
-        }
-
-        // MessagingStyle needs a "you"; iPhone notifications only ever contain incoming messages
-        val style = NotificationCompat.MessagingStyle(Person.Builder().setName("You").build())
-        conversation.title?.let {
-            style.setConversationTitle(it)
-            style.setGroupConversation(true)
-        }
-        messages.forEach { style.addMessage(it.text, it.timestamp, personFor(it.sender)) }
+        // Samsung's MessagingStyle screen spends half the display on the title, a "Today"
+        // divider and the sender's name again above every bubble. Plain big text is just the
+        // title, the time and the messages, newest on top; group chats name each sender.
+        val isGroup = conversation.title != null
+        fun line(m: ChatMessage) = if (isGroup) "${m.sender}: ${m.text}" else m.text
+        val title = conversation.title ?: latest.sender
+        val style = NotificationCompat.BigTextStyle()
+            .bigText(messages.asReversed().joinToString("\n\n") { line(it) })
 
         val allUids = conversation.messages.keys.toList()
         val notifId = conversation.notifId
         val builder = NotificationCompat.Builder(context, channelFor(group.categoryId))
             .setSmallIcon(NotificationIcons.iconForCategory(AncsConstants.CATEGORY_SOCIAL))
             .setStyle(style)
-            // Shown by surfaces that don't render MessagingStyle
-            .setContentTitle(conversation.title ?: latest.sender)
-            .setContentText(latest.text)
+            .setContentTitle(title)
+            .setContentText(line(latest))
             .setLargeIcon(group.appIcon)
-            .setSubText(group.appName)
             .setWhen(latest.timestamp)
             .setShowWhen(true)
             .setGroup(group.key)
@@ -296,6 +286,11 @@ class NotificationRenderer(
             .setDeleteIntent(
                 createActionIntent(notifId, "dismiss", allUids, AncsConstants.ACTION_NEGATIVE)
             )
+
+        // A sender named like the app (WhatsApp's own messages) would show "WhatsApp" twice
+        if (!sameName(group.appName, title)) {
+            builder.setSubText(group.appName)
+        }
 
         val latestUid = conversation.messages.entries.maxBy { it.value.timestamp }.key
         addActions(
@@ -423,6 +418,10 @@ class NotificationRenderer(
             else -> event.categoryName
         }
     }
+
+    /** iOS wraps some names in invisible direction marks ("‎WhatsApp"). */
+    private fun sameName(a: String, b: String) =
+        a.trim('‎', '‏') == b.trim('‎', '‏')
 
     private fun buildBody(attrs: AncsAttributeParser.NotificationAttributes): String {
         return attrs.message ?: ""
