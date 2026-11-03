@@ -64,7 +64,7 @@ fun Card(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> U
         modifier = modifier
             .fillMaxWidth()
             .background(SurfaceCard, RoundedCornerShape(16.dp))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = 18.dp, vertical = 8.dp),
         content = content
     )
 }

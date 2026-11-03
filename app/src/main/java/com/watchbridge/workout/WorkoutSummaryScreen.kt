@@ -16,6 +16,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -25,6 +26,8 @@ import androidx.compose.ui.unit.dp
 import androidx.wear.compose.foundation.lazy.AutoCenteringParams
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
 import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
+import androidx.wear.compose.material.Chip
+import androidx.wear.compose.material.ChipDefaults
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
 import com.watchbridge.health.HealthHistory
@@ -32,6 +35,8 @@ import com.watchbridge.health.HealthProfile
 import com.watchbridge.ui.components.WatchBridgeScaffold
 import com.watchbridge.ui.theme.SurfaceCard
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.text.SimpleDateFormat
@@ -51,9 +56,17 @@ private class SummaryData(
  * heart-rate zones, splits per km, laps and a small route.
  */
 @Composable
-fun WorkoutSummaryScreen(id: Long) {
+fun WorkoutSummaryScreen(id: Long, onDeleted: () -> Unit) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val listState = rememberScalingLazyListState()
+    var confirmDelete by remember { mutableStateOf(false) }
+    LaunchedEffect(confirmDelete) {
+        if (confirmDelete) {
+            delay(3000)
+            confirmDelete = false
+        }
+    }
     val recovery by WorkoutState.recovery.collectAsState()
     val measuring = recovery?.workoutId == id
     var data by remember { mutableStateOf<SummaryData?>(null) }
@@ -220,6 +233,26 @@ fun WorkoutSummaryScreen(id: Long) {
                             .padding(12.dp)
                     )
                 }
+            }
+
+            // Asks for a second tap, like Finish; also removes it from what the iPhone will get
+            item {
+                Chip(
+                    onClick = {
+                        if (!confirmDelete) {
+                            confirmDelete = true
+                        } else {
+                            scope.launch {
+                                withContext(Dispatchers.IO) { HealthHistory.get(context).deleteWorkout(id) }
+                                onDeleted()
+                            }
+                        }
+                    },
+                    label = { Text(if (confirmDelete) "Tap again to delete" else "Delete workout", maxLines = 1) },
+                    colors = ChipDefaults.outlinedChipColors(),
+                    border = ChipDefaults.outlinedChipBorder(),
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                )
             }
         }
     }

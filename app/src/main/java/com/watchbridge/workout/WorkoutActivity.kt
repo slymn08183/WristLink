@@ -197,7 +197,7 @@ private fun WorkoutMenu(live: WorkoutState.Live, withPermissions: (WorkoutType, 
         }
         composable("summary/{id}") { entry ->
             val id = entry.arguments?.getString("id")?.toLongOrNull() ?: 0L
-            WorkoutSummaryScreen(id)
+            WorkoutSummaryScreen(id, onDeleted = { navController.popBackStack() })
         }
         composable("history") {
             PastWorkoutsScreen(onOpen = { id -> navController.navigate("summary/$id") })
