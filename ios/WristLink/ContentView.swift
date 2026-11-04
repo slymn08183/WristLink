@@ -155,20 +155,60 @@ private struct WatchTab: View {
     }
 
     private func todayGrid(_ info: WatchInfo) -> some View {
+        TodayGrid(info: info, summary: link.summary, asleep: link.settings?.asleep == true)
+    }
+}
+
+/// Steps, heart rate and sleep from Apple Health, or straight from the watch when Apple Health
+/// has nothing (yet): before the first sync, with Health access turned off, or while samples are
+/// still waiting on the watch.
+private struct TodayGrid: View {
+    @EnvironmentObject private var stats: HealthStats
+    let info: WatchInfo
+    /// Its own view's observed object: changes inside WatchLink's summary don't reach WatchTab.
+    @ObservedObject var summary: SummaryFeed
+    let asleep: Bool
+
+    private var steps: Double? {
+        // Apple Health counts the iPhone's steps too, but may not have the watch's yet
+        let watch = summary.latest?.today?.steps
+        switch (stats.stepsToday, watch) {
+        case let (health?, watch?): return max(health, watch)
+        case let (health, watch): return health ?? watch
+        }
+    }
+
+    /// The newer of Apple Health's last reading and the watch's live one.
+    private var heartRate: (bpm: Double, date: Date?)? {
+        let health = stats.latestHeartRate.map { (bpm: $0, date: stats.latestHeartRateDate) }
+        let watch = info.hr?.bpm.map { (bpm: $0, date: info.hr?.date) }
+        guard let watch else { return health }
+        guard let health else { return watch }
+        return (watch.date ?? .distantPast) > (health.date ?? .distantPast) ? watch : health
+    }
+
+    private var sleep: TimeInterval? {
+        stats.sleepLastNight ?? summary.latest?.lastNight?.asleepMin.map { $0 * 60 }
+    }
+
+    var body: some View {
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
             StatTile(icon: "figure.walk", color: .green, title: "Steps today",
-                     value: stats.stepsToday.map { $0.formatted(.number.precision(.fractionLength(0))) } ?? "–")
+                     value: steps.map { $0.formatted(.number.precision(.fractionLength(0))) } ?? "–")
             StatTile(icon: "heart.fill", color: .pink, title: "Heart rate",
-                     value: stats.latestHeartRate.map { "\(Int($0)) bpm" } ?? "–",
-                     detail: stats.latestHeartRateDate.map { $0.formatted(.relative(presentation: .named)) })
+                     value: heartRate.map { "\(Int($0.bpm)) bpm" } ?? "–",
+                     detail: heartRate?.date.map { $0.formatted(.relative(presentation: .named)) })
             StatTile(icon: "bed.double.fill", color: .indigo, title: "Sleep last night",
-                     value: stats.sleepLastNight.map(Format.duration) ?? "–",
-                     detail: link.settings?.asleep == true ? "Asleep now" : nil)
+                     value: sleep.map(Format.duration) ?? "–",
+                     detail: asleep ? "Asleep now" : nil)
             StatTile(icon: "bell.badge.fill", color: .orange, title: "Notification delay",
                      value: info.medianDelayMs.map(Format.delay) ?? "–",
                      detail: "\(info.notifications) in 24 h")
         }
     }
+}
+
+private extension WatchTab {
 
     private func connectionCard(_ info: WatchInfo) -> some View {
         VStack(alignment: .leading, spacing: 12) {
