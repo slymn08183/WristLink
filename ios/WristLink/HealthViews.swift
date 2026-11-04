@@ -116,13 +116,34 @@ struct HealthDashboard: View {
     var body: some View {
         let numbers = today
         VStack(spacing: 16) {
-            TodayCard(numbers: numbers, profile: profile,
-                      week: Array((summary.latest?.days ?? []).suffix(7)),
-                      streak: summary.latest?.streak.map { Int($0) },
-                      collecting: collecting)
-            HourlyStepsCard(hourly: numbers.hourlySteps, collecting: collecting)
-            HeartRateCard(hours: numbers.hourlyHeart, restingBand: restingBand,
-                          restingHr: numbers.restingHr, latest: latestReading, collecting: collecting)
+            if let error = summary.lastError, !summary.loading {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote).foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            // Each card opens its history: a day in detail, or a week or a month
+            NavigationLink {
+                ActivityHistoryView(feed: summary, profile: profile)
+            } label: {
+                TodayCard(numbers: numbers, profile: profile,
+                          week: Array((summary.latest?.days ?? []).suffix(7)),
+                          streak: summary.latest?.streak.map { Int($0) },
+                          collecting: collecting)
+            }
+            .buttonStyle(.plain)
+            NavigationLink {
+                ActivityHistoryView(feed: summary, profile: profile)
+            } label: {
+                HourlyStepsCard(hourly: numbers.hourlySteps, collecting: collecting)
+            }
+            .buttonStyle(.plain)
+            NavigationLink {
+                HeartHistoryView(feed: summary, restingBand: restingBand)
+            } label: {
+                HeartRateCard(hours: numbers.hourlyHeart, restingBand: restingBand,
+                              restingHr: numbers.restingHr, latest: latestReading, collecting: collecting)
+            }
+            .buttonStyle(.plain)
             sleepCard
             WorkoutsCard(workouts: workouts, supported: protocolVersion >= 6, maxHeartRate: profile.maxHeartRate)
             weeklyCard
@@ -132,9 +153,17 @@ struct HealthDashboard: View {
     @ViewBuilder private var sleepCard: some View {
         if let latest = summary.latest, let night = latest.lastNight {
             NavigationLink {
-                SleepDetailView(summary: latest, night: night, profile: profile)
+                SleepDetailView(summary: latest, night: night, profile: profile, feed: summary)
             } label: {
                 SleepCard(night: night, fallback: nil, collecting: false)
+            }
+            .buttonStyle(.plain)
+        } else if !summary.nights.isEmpty {
+            // No night last night, but older ones are kept
+            NavigationLink {
+                SleepHistoryView(feed: summary, profile: profile)
+            } label: {
+                SleepCard(night: nil, fallback: nil, collecting: collecting)
             }
             .buttonStyle(.plain)
         } else {
@@ -266,7 +295,8 @@ private struct TodayCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             CardHeader(title: "Today", icon: "flame.fill", color: .green,
-                       detail: numbers.hasAny ? (numbers.fromWatch ? "From the watch" : "From Apple Health") : nil)
+                       detail: numbers.hasAny ? (numbers.fromWatch ? "From the watch" : "From Apple Health") : nil,
+                       chevron: true)
             if numbers.hasAny {
                 HStack {
                     Spacer()
@@ -417,7 +447,7 @@ private struct HourlyStepsCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            CardHeader(title: "Activity by time of day", icon: "chart.bar.fill", color: .green)
+            CardHeader(title: "Activity by time of day", icon: "chart.bar.fill", color: .green, chevron: true)
             if hourly.contains(where: { $0 > 0 }) {
                 Chart(ChartDay.hours(hourly)) { hour in
                     BarMark(
@@ -462,7 +492,7 @@ struct HeartRateCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            CardHeader(title: "Heart rate", icon: "heart.fill", color: .pink)
+            CardHeader(title: "Heart rate", icon: "heart.fill", color: .pink, chevron: true)
             if let latest {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text("\(Int(latest.bpm.rounded()))")
@@ -642,6 +672,8 @@ struct SleepDetailView: View {
     let summary: HealthSummary
     let night: HealthSummary.Night
     let profile: WatchProfile
+    /// For the link to every night kept.
+    var feed: SummaryFeed? = nil
 
     var body: some View {
         ScrollView {
@@ -652,6 +684,16 @@ struct SleepDetailView: View {
                 stagesNote
                 heartCard
                 weekCard
+                if let feed {
+                    NavigationLink {
+                        SleepHistoryView(feed: feed, profile: profile)
+                    } label: {
+                        CardHeader(title: "Sleep history", icon: "calendar", color: .indigo,
+                                   detail: "\(feed.nights.count) nights", chevron: true)
+                            .card()
+                    }
+                    .buttonStyle(.plain)
+                }
                 animalCard
             }
             .padding()

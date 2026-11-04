@@ -177,11 +177,11 @@ final class WatchLink: NSObject, ObservableObject {
         refreshSummary()
     }
 
-    /// Ask the watch for its summary of the last week (protocol 6).
+    /// Ask the watch for its summary (protocol 6): everything it keeps the first time, then two weeks.
     func refreshSummary() {
         guard protocolVersion >= 6, syncCharacteristic?.isNotifying == true else { return }
         summaryAsked = true
-        summary.request(days: 7)
+        summary.request()
     }
 
     /// Change one field of the watch's body profile and goals (protocol 6). Shown right away; the

@@ -67,6 +67,63 @@ final class HealthStats: ObservableObject {
 
     private static let bpm = HKUnit.count().unitDivided(by: .minute())
 
+    /// One heart-rate reading, for the history screens' day view.
+    struct HeartPoint: Identifiable {
+        let date: Date
+        let bpm: Double
+        var id: Date { date }
+    }
+
+    /// One stretch of time and its total, for the history screens' day view.
+    struct Bucket: Identifiable {
+        let start: Date
+        let value: Double
+        var id: Date { start }
+    }
+
+    /// Every heart-rate reading in the window, oldest first (the watch sends about one a minute).
+    func heartRatePoints(from start: Date, to end: Date) async -> [HeartPoint] {
+        guard HKHealthStore.isHealthDataAvailable() else { return [] }
+        let bpm = HKUnit.count().unitDivided(by: .minute())
+        return await withCheckedContinuation { continuation in
+            let query = HKSampleQuery(
+                sampleType: HKQuantityType(.heartRate),
+                predicate: HKQuery.predicateForSamples(withStart: start, end: end),
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: [NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)]
+            ) { _, samples, _ in
+                let points = (samples as? [HKQuantitySample] ?? []).map {
+                    HeartPoint(date: $0.startDate, bpm: $0.quantity.doubleValue(for: bpm))
+                }
+                continuation.resume(returning: points)
+            }
+            store.execute(query)
+        }
+    }
+
+    /// A cumulative quantity (steps, energy, distance) in buckets of `minutes`.
+    func buckets(_ id: HKQuantityTypeIdentifier, unit: HKUnit, from start: Date, to end: Date,
+                 minutes: Int) async -> [Bucket] {
+        guard HKHealthStore.isHealthDataAvailable() else { return [] }
+        return await withCheckedContinuation { continuation in
+            let query = HKStatisticsCollectionQuery(
+                quantityType: HKQuantityType(id),
+                quantitySamplePredicate: HKQuery.predicateForSamples(withStart: start, end: end),
+                options: .cumulativeSum,
+                anchorDate: start,
+                intervalComponents: DateComponents(minute: minutes)
+            )
+            query.initialResultsHandler = { _, collection, _ in
+                var result: [Bucket] = []
+                collection?.enumerateStatistics(from: start, to: end) { stats, _ in
+                    result.append(Bucket(start: stats.startDate, value: stats.sumQuantity()?.doubleValue(for: unit) ?? 0))
+                }
+                continuation.resume(returning: result)
+            }
+            store.execute(query)
+        }
+    }
+
     /// Steps in each hour of the day, 24 values (fewer on a daylight-saving day).
     private func hourlyStepCounts(from start: Date, to end: Date) async -> [Double] {
         await withCheckedContinuation { continuation in
