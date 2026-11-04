@@ -76,7 +76,7 @@ private struct ConnectView: View {
         case .choosing: return link.candidates.isEmpty ? "No watch found" : "Which one is your watch?"
         case .connecting: return "Connecting to \(link.watchName ?? "your watch")"
         case .connected: return ""
-        case .noCompanionService: return "Update WristLink on the watch"
+        case .noCompanionService: return "WristLink isn't answering on the watch"
         }
     }
 
@@ -89,7 +89,7 @@ private struct ConnectView: View {
                 ? "Pair the watch in Settings → Bluetooth first (it shows up as WristLink), then pull down here."
                 : "Pick the Galaxy Watch. It's listed under the name it had when you paired it."
         case .connecting: return "The watch needs to be nearby with WristLink running."
-        case .noCompanionService: return "This watch runs an older WristLink without the iPhone link. Install the latest version on the watch."
+        case .noCompanionService: return "Open WristLink on the watch; this connects by itself once it runs. If it stays like this, the watch has an older WristLink: update it in WristLink's settings on the watch."
         default: return ""
         }
     }

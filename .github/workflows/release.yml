@@ -48,7 +48,8 @@ jobs:
           echo "Latest tag: $LATEST"
           echo "Next tag:   $NEW_TAG"
           echo "VERSION_NAME=${NEW_VERSION}" >> "$GITHUB_ENV"
-          echo "VERSION_CODE=${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+          # Same as a local build of this commit (app/build.gradle.kts), so the two always agree
+          echo "VERSION_CODE=$(git rev-list --count HEAD)" >> "$GITHUB_ENV"
           echo "NEW_TAG=${NEW_TAG}" >> "$GITHUB_ENV"
           echo "version_name=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
           echo "new_tag=${NEW_TAG}" >> "$GITHUB_OUTPUT"

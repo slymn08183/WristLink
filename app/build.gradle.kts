@@ -4,6 +4,11 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+/** A git command's output, or null outside a checkout (e.g. a source zip). */
+fun git(vararg args: String): String? = runCatching {
+    providers.exec { commandLine("git", *args) }.standardOutput.asText.get().trim()
+}.getOrNull()?.takeIf { it.isNotEmpty() }
+
 android {
     namespace = "com.watchbridge"
     compileSdk = 34
@@ -12,8 +17,14 @@ android {
         applicationId = "com.watchbridge"
         minSdk = 30
         targetSdk = 34
-        versionCode = (System.getenv("VERSION_CODE")?.toIntOrNull()) ?: 1
-        versionName = System.getenv("VERSION_NAME") ?: "0.1.0"
+        // Both come from git, so a local build and the release of the same commit agree and
+        // every later commit counts higher (the updater refuses nothing it shouldn't).
+        // CI passes the release's own name, e.g. "0.1.10"; a local build between releases is
+        // named after the last one, e.g. "0.1.10-3-gabc1234", which the updater sees as 0.1.10.
+        versionCode = System.getenv("VERSION_CODE")?.toIntOrNull()
+            ?: git("rev-list", "--count", "HEAD")?.toIntOrNull() ?: 1
+        versionName = System.getenv("VERSION_NAME")
+            ?: git("describe", "--tags", "--match", "v*")?.removePrefix("v") ?: "0.0.0-dev"
     }
 
     signingConfigs {
