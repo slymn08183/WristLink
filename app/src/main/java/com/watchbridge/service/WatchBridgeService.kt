@@ -25,6 +25,7 @@ import com.watchbridge.ble.BleAdvertiser
 import com.watchbridge.ble.BleConnectionManager
 import com.watchbridge.ble.BondManager
 import com.watchbridge.ble.ConnectionStateMachine
+import com.watchbridge.ble.PhoneActivityMonitor
 import com.watchbridge.notification.AncsNotificationPipeline
 import com.watchbridge.notification.AppIconResolver
 import com.watchbridge.notification.AppNameResolver
@@ -107,6 +108,7 @@ class WatchBridgeService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var actionReceiver: NotificationActionReceiver? = null
     private var mediaSessionBridge: MediaSessionBridge? = null
+    private var phoneActivityMonitor: PhoneActivityMonitor? = null
 
     /** When the state machine last changed state; the watchdog measures stuckness from it. */
     @Volatile
@@ -155,6 +157,8 @@ class WatchBridgeService : Service() {
         val callHandler = CallNotificationHandler(this, renderer)
         val appNameResolver = AppNameResolver(this)
         val appIconResolver = AppIconResolver(this)
+        val phoneActivity = PhoneActivityMonitor(this, bondMgr)
+        phoneActivityMonitor = phoneActivity
         val pipe = AncsNotificationPipeline(
             context = this,
             connectionManager = connMgr,
@@ -163,7 +167,8 @@ class WatchBridgeService : Service() {
             callHandler = callHandler,
             appNameResolver = appNameResolver,
             appIconResolver = appIconResolver,
-            settings = settings
+            settings = settings,
+            phoneActivity = phoneActivity
         )
 
         val media = AmsMediaManager(connMgr)
@@ -231,6 +236,8 @@ class WatchBridgeService : Service() {
                 // would bring it back each time. Live status is on the tile and in the app.
                 ConnectionTileService.requestUpdate(this@WatchBridgeService)
                 showBluetoothOffAlert(state == ConnectionStateMachine.State.BLUETOOTH_OFF)
+                // Notifications only come while connected, so only listen then
+                if (state == ConnectionStateMachine.State.READY) phoneActivity.start() else phoneActivity.stop()
 
                 when (state) {
                     ConnectionStateMachine.State.READY ->
@@ -360,6 +367,8 @@ class WatchBridgeService : Service() {
         Log.i(TAG, "Service destroyed")
 
         advertiser?.close()
+        phoneActivityMonitor?.stop()
+        phoneActivityMonitor = null
         stateMachine?.disconnect()
         bondManager?.unregister()
 

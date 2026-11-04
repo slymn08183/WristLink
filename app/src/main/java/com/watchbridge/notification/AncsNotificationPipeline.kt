@@ -10,6 +10,7 @@ import com.watchbridge.ancs.AncsConstants
 import com.watchbridge.ancs.AncsNotificationEvent
 import com.watchbridge.ancs.AncsSessionManager
 import com.watchbridge.ble.BleConnectionManager
+import com.watchbridge.ble.PhoneActivityMonitor
 import com.watchbridge.diagnostics.LinkStats
 import com.watchbridge.settings.SettingsManager
 import kotlinx.coroutines.CoroutineScope
@@ -33,7 +34,8 @@ class AncsNotificationPipeline(
     private val callHandler: CallNotificationHandler,
     private val appNameResolver: AppNameResolver,
     private val appIconResolver: AppIconResolver,
-    private val settings: SettingsManager
+    private val settings: SettingsManager,
+    private val phoneActivity: PhoneActivityMonitor? = null
 ) {
 
     companion object {
@@ -63,6 +65,9 @@ class AncsNotificationPipeline(
 
     /** New (not pre-existing) notifications → when the watch heard about them, for LinkStats. */
     private val announcedAt = ConcurrentHashMap<UInt, Long>()
+
+    /** Arrived while the iPhone was in use: seen there already, so never shown here. */
+    private val seenOnPhone = ConcurrentHashMap.newKeySet<UInt>()
 
     private val notificationManager =
         context.getSystemService(NotificationManager::class.java)
@@ -104,6 +109,19 @@ class AncsNotificationPipeline(
             event.isAdded || event.isModified -> {
                 val heardAt = System.currentTimeMillis()
 
+                // Like an Apple Watch: what pops up on the iPhone in your hand stays there.
+                // Its later updates stay away too, or they'd bring it back. Calls always ring.
+                val uid = event.notificationUid
+                if (uid in seenOnPhone) return
+                if (event.isAdded && !event.isPreExisting &&
+                    !callHandler.isCallCategory(event.categoryId) &&
+                    phoneActivity?.isPhoneInUse == true
+                ) {
+                    seenOnPhone += uid
+                    Log.d(TAG, "iPhone in use, skipped uid=$uid cat=${event.categoryName}")
+                    return
+                }
+
                 // Apply filters
                 if (!shouldShowNotification(event)) {
                     Log.d(TAG, "Filtered out: uid=${event.notificationUid} cat=${event.categoryName}")
@@ -123,6 +141,7 @@ class AncsNotificationPipeline(
                 attributeRequestQueue.trySend(event)
             }
             event.isRemoved -> {
+                if (seenOnPhone.remove(event.notificationUid)) return
                 pendingEvents.remove(event.notificationUid)
                 awaitingAttributes.remove(event.notificationUid)
                 announcedAt.remove(event.notificationUid)
@@ -285,6 +304,8 @@ class AncsNotificationPipeline(
         pendingEvents.clear()
         awaitingAttributes.clear()
         announcedAt.clear()
+        // UIDs start over with the next session
+        seenOnPhone.clear()
         callHandler.cancelIncomingCall()
         callHandler.cancelActiveCall()
     }
