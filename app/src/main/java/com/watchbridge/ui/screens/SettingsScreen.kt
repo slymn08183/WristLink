@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import android.content.Intent
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
@@ -73,6 +75,17 @@ fun SettingsScreen(settings: SettingsManager, onOpenStats: () -> Unit) {
         if (!AppUpdater.openInstallPermissionSettings(context)) showAdbHint = true
     }
 
+    // The system's install confirmation, opened from this screen so it goes on top of WristLink
+    // in the same task (from the background, Wear OS put WristLink back over it). Once per
+    // request; after that the chip opens it again.
+    val confirmInstall: (Intent) -> Unit = { confirm ->
+        runCatching { context.startActivity(confirm) }
+            .onFailure { Log.w("SettingsScreen", "Couldn't open the install screen", it) }
+    }
+    LaunchedEffect(updateState) {
+        (updateState as? AppUpdater.State.NeedsConfirmation)?.let { confirmInstall(it.confirm) }
+    }
+
     // Check once when Settings opens, so an available update shows up right away
     LaunchedEffect(Unit) {
         if (AppUpdater.state.value == AppUpdater.State.Idle) AppUpdater.checkForUpdate(context)
@@ -136,7 +149,8 @@ fun SettingsScreen(settings: SettingsManager, onOpenStats: () -> Unit) {
                     installedVersion = remember { AppUpdater.installedVersion(context) },
                     onCheck = { AppUpdater.checkForUpdate(context) },
                     onInstall = { AppUpdater.downloadAndInstall(context, it) },
-                    onAllowInstalls = openInstallSettings
+                    onAllowInstalls = openInstallSettings,
+                    onConfirm = confirmInstall
                 )
             }
 
@@ -313,7 +327,8 @@ private fun UpdateChip(
     installedVersion: String,
     onCheck: () -> Unit,
     onInstall: (AppUpdater.Release) -> Unit,
-    onAllowInstalls: () -> Unit
+    onAllowInstalls: () -> Unit,
+    onConfirm: (Intent) -> Unit
 ) {
     // label, detail, and what tapping does (null = busy, not tappable)
     val (label, detail, onClick) = when (state) {
@@ -333,8 +348,13 @@ private fun UpdateChip(
             "Version ${state.release.version}",
             null
         )
-        AppUpdater.State.Installing ->
-            Triple("Installing…", "Confirm on the next screen", null)
+        is AppUpdater.State.Installing ->
+            Triple("Installing…", "Version ${state.release.version}", null)
+        is AppUpdater.State.NeedsConfirmation -> Triple(
+            "Confirm the update",
+            "Tap if the install screen is gone",
+            { onConfirm(state.confirm) }
+        )
         is AppUpdater.State.NeedsInstallPermission ->
             Triple("Allow installing updates", "Then the update continues", onAllowInstalls)
         is AppUpdater.State.Failed -> Triple(

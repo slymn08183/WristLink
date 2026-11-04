@@ -20,6 +20,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -48,6 +49,8 @@ object AppUpdater {
 
     private const val NETWORK_TIMEOUT_MS = 15_000
     private const val FAST_NETWORK_TIMEOUT_MS = 10_000
+    /** Longer than any confirmation takes; an installed update restarts the app before it. */
+    private const val INSTALL_TIMEOUT_MS = 180_000L
 
     internal const val ACTION_INSTALL_STATUS = "com.watchbridge.update.INSTALL_STATUS"
 
@@ -59,7 +62,13 @@ object AppUpdater {
         data class UpToDate(val version: String) : State
         data class Available(val release: Release) : State
         data class Downloading(val release: Release, val progress: Float) : State
-        data object Installing : State
+        data class Installing(val release: Release) : State
+        /**
+         * The system wants a yes first (always the first time, while adb is the installer of
+         * record). The settings screen opens [confirm] on top of itself: started from here, in
+         * a task of its own, Wear OS brought WristLink back over it and hid it.
+         */
+        data class NeedsConfirmation(val release: Release, val confirm: Intent) : State
         /** WatchBridge isn't allowed to install apps yet. */
         data class NeedsInstallPermission(val release: Release) : State
         /** [release] is set when retrying should download it again. */
@@ -68,6 +77,7 @@ object AppUpdater {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var job: Job? = null
+    private var installTimeout: Job? = null
 
     private val _state = MutableStateFlow<State>(State.Idle)
     val state: StateFlow<State> = _state.asStateFlow()
@@ -118,8 +128,18 @@ object AppUpdater {
                     _state.value = State.Failed(problem)
                     return@launch
                 }
-                _state.value = State.Installing
+                _state.value = State.Installing(release)
                 install(appContext, apk)
+                // No result at all means the install is stuck somewhere; let it be tried again.
+                // Its own job, so trying again doesn't wait for this one.
+                installTimeout?.cancel()
+                installTimeout = scope.launch {
+                    delay(INSTALL_TIMEOUT_MS)
+                    val now = _state.value
+                    if (now is State.Installing || now is State.NeedsConfirmation) {
+                        _state.value = State.Failed("The install didn't finish. Tap to try again.", release)
+                    }
+                }
             } catch (e: IOException) {
                 Log.w(TAG, "Update download/install failed", e)
                 _state.value = State.Failed("Download failed. Check the watch's Wi-Fi and try again.", release)
@@ -271,10 +291,17 @@ object AppUpdater {
         val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
         when (status) {
             PackageInstaller.STATUS_PENDING_USER_ACTION -> {
-                // The system's "Install update?" confirmation
+                // The system's "Install update?" confirmation, opened by the settings screen
                 val confirm = IntentCompat.getParcelableExtra(intent, Intent.EXTRA_INTENT, Intent::class.java)
-                if (confirm != null) {
-                    context.startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                val release = when (val now = _state.value) {
+                    is State.Installing -> now.release
+                    is State.NeedsConfirmation -> now.release
+                    else -> null
+                }
+                _state.value = if (confirm != null && release != null) {
+                    State.NeedsConfirmation(release, confirm)
+                } else {
+                    State.Failed("The watch didn't show the install screen. Tap to try again.", release)
                 }
             }
             PackageInstaller.STATUS_SUCCESS -> {
