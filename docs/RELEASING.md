@@ -36,6 +36,15 @@ To copy the base64 to your clipboard on macOS:
 base64 -i watchbridge-release.keystore | pbcopy
 ```
 
+Or set all four with the GitHub CLI from Windows PowerShell, with a `keystore.env` holding
+`KEYSTORE_PATH=`, `KEYSTORE_PASSWORD=`, `KEY_ALIAS=` and `KEY_PASSWORD=` lines:
+
+```powershell
+Get-Content ..\keys\keystore.env | ForEach-Object { if ($_ -match '^([^#=]+)=(.*)$') { Set-Item "env:$($matches[1].Trim())" $matches[2].Trim() } }
+[Convert]::ToBase64String([IO.File]::ReadAllBytes($env:KEYSTORE_PATH)) | gh secret set KEYSTORE_BASE64
+$env:KEYSTORE_PASSWORD | gh secret set KEYSTORE_PASSWORD; $env:KEY_ALIAS | gh secret set KEY_ALIAS; $env:KEY_PASSWORD | gh secret set KEY_PASSWORD
+```
+
 ## One-time: releasing from a fork
 
 GitHub doesn't copy secrets to forks and keeps Actions off until you turn them on:
@@ -100,8 +109,6 @@ export KEYSTORE_PATH=/path/to/watchbridge-release.keystore
 export KEYSTORE_PASSWORD=...
 export KEY_ALIAS=watchbridge
 export KEY_PASSWORD=...
-export VERSION_NAME=0.2.0-test
-export VERSION_CODE=999
 
 ./gradlew :app:assembleRelease
 
@@ -112,9 +119,25 @@ If the certificate fingerprint matches the one CI prints, you're golden.
 
 ## Versioning
 
-Tags drive the version. The CI workflow strips the leading `v` for `versionName` and uses `github.run_number` for `versionCode` (monotonically increasing — required for Android update detection).
+Both numbers come from git (`app/build.gradle.kts`), the same way locally and in CI:
 
-For local development, `versionName` defaults to `"0.1.0"` and `versionCode` to `1`. Set `VERSION_NAME` / `VERSION_CODE` env vars to override.
+- `versionCode` is the commit count (`git rev-list --count HEAD`). It grows with every commit, and
+  a local build and the release of the same commit get the same number, so a release always
+  installs over a local build of an older commit.
+- `versionName` is the release tag without the `v` (CI passes it in as `VERSION_NAME`). A local
+  build between releases is named after the last tag, e.g. `0.1.17-2-g8415fa4`; the watch's
+  updater reads that as 0.1.17 and offers 0.1.18 once it's out.
+
+`VERSION_NAME` / `VERSION_CODE` still override both.
+
+## How the watch updates itself
+
+**WristLink → Settings → Updates** asks GitHub for the latest release
+(`/releases/latest`, so `ios-latest`, a pre-release, never counts), compares its tag with the
+installed `versionName`, downloads the first `.apk` asset, checks it is signed with the same key,
+and installs it with the system installer. While adb is the installer of record (right after
+`install.sh` / `install.bat`), Android asks once on the watch to confirm; after WristLink
+installed itself once, later updates need no tap.
 
 ## If the keystore is lost
 

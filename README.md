@@ -10,7 +10,8 @@ other wearables do, and adds an iPhone companion app for what iOS doesn't share 
 
 > WristLink is a fork of [WatchBridge](https://github.com/WasThatRudy/watchbridge) by Raj Tiwari,
 > which did the hard groundwork on iOS's notification and media services. The original
-> documentation is in [docs/upstream-README.md](docs/upstream-README.md).
+> documentation is in [docs/upstream-README.md](docs/upstream-README.md) and its plan in
+> [docs/upstream-plan.md](docs/upstream-plan.md).
 
 ## What works
 
@@ -28,7 +29,10 @@ other wearables do, and adds an iPhone companion app for what iOS doesn't share 
 | App icons for apps the watch hasn't seen, without Wi-Fi on the watch | Yes (else the watch's Wi-Fi) |
 | Weather and sunrise/sunset: a tile, and complications for any watch face that takes them | Yes |
 | Two WristLink watch faces with the weather built in (see below) | Weather: yes |
-| Apple Health sync (steps, heart rate, sleep, ...) | Yes, [in progress](#roadmap) |
+| Health on the watch: activity rings, heart rate, sleep score, tiles and complications ([below](#health)) | No |
+| Workouts on the watch: run, walk, hike, bike, rowing and more, with heart-rate zones and laps | No |
+| Apple Health sync: steps, heart rate, sleep, workouts with their GPS route | Yes |
+| Health dashboard on the iPhone with day, week and month charts and months of history | Yes |
 
 Not possible on iPhone for any third-party watch: replying to messages, call history, Apple Pay.
 
@@ -49,6 +53,28 @@ sunrise or sunset under the time. Touch and hold it to pick other data for the g
 slot, or a single accent color. **WristLink** is the quieter one: the time, the weather and two
 round slots. Both draw only once a second with the screen on and once a minute on Always On.
 
+## Health
+
+The watch keeps 90 days of activity, heart rate and sleep itself, from the sensors Wear OS
+shares (Health Services), and works it out the way Samsung Health does:
+
+- **Today:** three rings for moving, active time and calories (each one picks what it counts:
+  steps or floors, active or exercise minutes, ...) against your goals, and the day hour by hour.
+- **Heart rate:** live, the day's range, and resting heart rate against the normal range for
+  your age and sex.
+- **Sleep:** time asleep, awake stretches and a 0–100 score, from the watch's own sleep detection.
+- **Workouts:** live screens, heart-rate zones, laps, and a summary afterwards.
+- **Coaching:** a nudge after 50 minutes sitting, alerts for a heart rate that stays too high or
+  too low at rest, step goal reminders and badges.
+- **Tiles and complications** for activity, heart rate and sleep, on any watch face.
+
+The iPhone app writes all of it to Apple Health and shows it on its Health tab: tap a card for
+its history by day, week or month. The iPhone keeps every day it has seen, so the history goes
+back further than the watch's 90 days.
+
+Samsung Health's own numbers (its sleep stages, blood oxygen, ECG, stress) stay in Samsung Health;
+it doesn't share them with other apps.
+
 ## Install
 
 ### Watch
@@ -68,6 +94,13 @@ The watch and the computer must be on the same Wi-Fi.
 Turn off Bluetooth on any Android phone the watch was set up with while pairing, or Wear OS may
 hide the watch from the iPhone.
 
+### Updates
+
+The watch updates itself: **WristLink → Settings → Updates** checks this repository's latest
+[release](https://github.com/slymn08183/WristLink/releases/latest) over Wi-Fi. The first
+update after installing with adb asks you to confirm it on the watch; later ones install on
+their own. On the iPhone, updates come through SideStore (see below).
+
 The permissions the installer grants, for reference:
 
 ```sh
@@ -83,7 +116,7 @@ pm grant com.watchbridge android.permission.BODY_SENSORS              # heart ra
 
 ### iPhone app (optional)
 
-No Mac needed: it is built on GitHub and installed with AltStore. See [ios/README.md](ios/README.md).
+No Mac needed: it is built on GitHub and installed with SideStore (or AltStore, Sideloadly). See [ios/README.md](ios/README.md).
 
 ## Battery
 
@@ -96,10 +129,9 @@ Health's sleep measurements (blood oxygen especially), Bluetooth and the screen.
 
 ## Roadmap
 
+- **Don't buzz while the iPhone is in use**, like an Apple Watch: an experiment reads whether the
+  iPhone's screen is on from its Bluetooth advertisements; nothing is held back yet.
 - **iPhone app:** ring phone / ring watch, camera preview.
-- **Sleep:** better detection, sleep sessions to Apple Health.
-- **Workouts:** record on the watch, Apple Health with route, Strava upload.
-- **Don't buzz while the iPhone is in use.**
 
 ## Project layout
 
@@ -107,13 +139,19 @@ Health's sleep measurements (blood oxygen especially), Bluetooth and the screen.
 app/        Wear OS app (Kotlin, Compose for Wear OS)
 ios/        iPhone companion app (SwiftUI, generated with XcodeGen)
 scripts/    Watch installers
-docs/       Upstream documentation and notes
+docs/       Protocol, release process, health plan, upstream documentation
 ```
 
-Watch builds: `./gradlew assembleDebug`. Releases are signed with the `KEYSTORE_*` environment
-variables (see `app/build.gradle.kts`). iPhone builds run in GitHub Actions
-(`.github/workflows/ios.yml`) and land in the
-[`ios-latest`](https://github.com/slymn08183/WristLink/releases/tag/ios-latest) pre-release.
+Watch builds: `./gradlew assembleDebug` (installs next to the release app as
+`com.watchbridge.debug`). Every push to `master` that changes the watch app publishes a signed
+release (`v0.1.x`) that the watch's updater picks up; versions come from git, so a local build
+and the release of the same commit agree. See [docs/RELEASING.md](docs/RELEASING.md).
+
+iPhone builds run in GitHub Actions (`.github/workflows/ios.yml`) and land in the
+[`ios-latest`](https://github.com/slymn08183/WristLink/releases/tag/ios-latest) pre-release,
+which SideStore offers as an update.
+
+The watch ↔ iPhone protocol is in [docs/companion-protocol.md](docs/companion-protocol.md).
 
 ## License
 
