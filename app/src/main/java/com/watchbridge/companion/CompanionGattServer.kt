@@ -74,6 +74,8 @@ class CompanionGattServer(private val context: Context) {
         private val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
         private const val DEFAULT_MTU = 23
+        private const val BUSY_RETRY_MS = 30L
+        private const val MAX_BUSY_RETRIES = 50
         private const val MAX_ATTRIBUTE_LENGTH = 512
         private const val MAX_BATCH = 100
         private const val PENDING_NOTIFY_INTERVAL_MS = 15 * 60 * 1000L
@@ -114,6 +116,8 @@ class CompanionGattServer(private val context: Context) {
     /** Notifications go out one at a time: the next waits for onNotificationSent. */
     private val outbox = ArrayDeque<Triple<BluetoothDevice, BluetoothGattCharacteristic, ByteArray>>()
     private var sending = false
+    /** Times in a row the stack refused the piece at the head of the outbox. */
+    private var busyRetries = 0
 
     private var lastBattery = -1
     private var lastPendingNotifyMs = 0L
@@ -346,8 +350,13 @@ class CompanionGattServer(private val context: Context) {
                 notifyInfo()
             }
             "summary" -> {
-                val days = request.optInt("days", 7).coerceIn(1, 14)
-                sendMessage(device, HealthMetrics.summaryJson(context, days))
+                // Up to everything the watch keeps, so a new iPhone app can fill its history once
+                val days = request.optInt("days", 7).coerceIn(1, HealthHistory.MAX_AGE_DAYS)
+                val summary = runCatching { HealthMetrics.summaryJson(context, days) }
+                    .onFailure { Log.e(TAG, "Summary failed", it) }
+                    .getOrElse { JSONObject().put("op", "summary").put("error", it.toString()) }
+                sendMessage(device, summary)
+                Log.i(TAG, "Sent summary of $days days")
             }
             "weather" -> {
                 WeatherStore.save(context, request)
@@ -422,10 +431,25 @@ class CompanionGattServer(private val context: Context) {
             }
         }.onFailure { Log.w(TAG, "Notification to ${device.address} failed", it) }.getOrDefault(false)
         if (!queued) {
-            // Busy or gone; drop this one and keep the queue moving
+            // Usually the stack is just busy. Dropping a piece would break the whole message
+            // (a summary is ~20 of them), so the same piece goes again shortly. A device that
+            // keeps refusing is gone: its queue is dropped rather than retried forever.
             sending = false
-            Log.w(TAG, "Notification to ${device.address} not queued")
+            if (++busyRetries <= MAX_BUSY_RETRIES) {
+                outbox.addFirst(Triple(device, characteristic, value))
+                scope.launch {
+                    delay(BUSY_RETRY_MS)
+                    sendNext()
+                }
+            } else {
+                Log.w(TAG, "Notifications to ${device.address} keep failing, dropping its queue")
+                busyRetries = 0
+                outbox.removeAll { it.first == device }
+                sendNext()
+            }
+            return
         }
+        busyRetries = 0
     }
 
     private fun infoJson(): ByteArray {

@@ -29,7 +29,9 @@ New `t` values in `items`, on top of `steps`, `distance`, `hr`, `sleep`:
 The watch computes every derived number (rings, resting HR, sleep score, animal, energy score) so
 the iPhone never re-implements the formulas.
 
-Request: `{"op":"summary","days":7}` (1–14).
+Request: `{"op":"summary","days":7}` (1–90, as far back as the watch keeps minutes). A 90-day
+reply is ~100 KB; the iPhone asks for that once to fill its own history, then for two weeks.
+If the watch fails to build it, the reply is `{"op":"summary","error":"..."}`.
 
 Reply:
 
