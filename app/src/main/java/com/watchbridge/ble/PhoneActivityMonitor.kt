@@ -35,6 +35,14 @@ class PhoneActivityMonitor(context: Context, private val bondManager: BondManage
 
         /** Older than this, the last state says nothing about now. */
         private const val STALE_MS = 15_000L
+
+        /**
+         * Off: even filtered and at low power, the scan ran all day and woke the watch for every
+         * advertisement (42k results and 20 mAh of Bluetooth in 16 hours, 8% of a day's drain,
+         * against 0.2% for everything else WristLink does), while no action code has been
+         * mapped to "in use" yet, so it never held anything back. Turn it on only to measure.
+         */
+        private const val ENABLED = false
     }
 
     private val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
@@ -61,7 +69,7 @@ class PhoneActivityMonitor(context: Context, private val bondManager: BondManage
 
     @Synchronized
     fun start() {
-        if (scanning) return
+        if (!ENABLED || scanning) return
         val scanner = adapter?.bluetoothLeScanner ?: return
         // Only Apple advertisements that start with Nearby Info wake the app
         val filter = ScanFilter.Builder()
