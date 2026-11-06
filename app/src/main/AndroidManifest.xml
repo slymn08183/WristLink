@@ -76,6 +76,12 @@
         android:supportsRtl="true"
         android:theme="@android:style/Theme.DeviceDefault">
 
+        <!-- One-time hand-over of this app's data to com.wristlink (same signing key only) -->
+        <provider
+            android:name=".ExportProvider"
+            android:authorities="com.watchbridge.export"
+            android:exported="true" />
+
         <!-- Wear OS standalone flag — no companion app required -->
         <meta-data
             android:name="com.google.android.wearable.standalone"
