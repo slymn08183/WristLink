@@ -1,4 +1,4 @@
-# Releasing WatchBridge
+# Releasing WristLink
 
 One-time setup, then every release after is `git tag vX.Y.Z && git push --tags`.
 
@@ -8,14 +8,14 @@ The keystore is the project's signing identity. Treat it like a private key — 
 
 ```bash
 keytool -genkey -v \
-  -keystore watchbridge-release.keystore \
+  -keystore wristlink-release.keystore \
   -keyalg RSA -keysize 4096 -validity 10000 \
-  -alias watchbridge
+  -alias wristlink
 ```
 
 When prompted:
 - **Keystore password:** strong, unique. Save it.
-- **Distinguished name:** anything reasonable (`CN=WatchBridge, O=WatchBridge, C=US`).
+- **Distinguished name:** anything reasonable (`CN=WristLink, O=WristLink, C=US`).
 - **Key password:** same as keystore password (simpler).
 
 **Back up the `.keystore` file** somewhere safe — 1Password attachment, encrypted disk, etc. Don't commit it. The repo's `.gitignore` already blocks `*.keystore`.
@@ -26,14 +26,14 @@ GitHub repo → **Settings → Secrets and variables → Actions → New reposit
 
 | Secret name         | Value                                                              |
 | ------------------- | ------------------------------------------------------------------ |
-| `KEYSTORE_BASE64`   | Output of `base64 -i watchbridge-release.keystore` (one long line) |
+| `KEYSTORE_BASE64`   | Output of `base64 -i wristlink-release.keystore` (one long line) |
 | `KEYSTORE_PASSWORD` | The keystore password from `keytool`                               |
-| `KEY_ALIAS`         | `watchbridge`                                                      |
+| `KEY_ALIAS`         | `wristlink`                                                      |
 | `KEY_PASSWORD`      | The key password (same as keystore password if you reused it)      |
 
 To copy the base64 to your clipboard on macOS:
 ```bash
-base64 -i watchbridge-release.keystore | pbcopy
+base64 -i wristlink-release.keystore | pbcopy
 ```
 
 Or set all four with the GitHub CLI from Windows PowerShell, with a `keystore.env` holding
@@ -69,8 +69,8 @@ The `Release` workflow (`.github/workflows/release.yml`) will:
 2. Push the new tag.
 3. Build a signed release APK (`assembleRelease`).
 4. Verify the signature with `apksigner`.
-5. Create a GitHub Release named `WatchBridge 0.1.1` with auto-generated notes from commits/PRs since the previous tag.
-6. Attach `watchbridge-0.1.1.apk` + `install.sh` + `install.bat`.
+5. Create a GitHub Release named `WristLink 0.1.1` with auto-generated notes from commits/PRs since the previous tag.
+6. Attach `wristlink-0.1.1.apk` + `install.sh` + `install.bat`.
 
 Watch the run at **GitHub repo → Actions tab**. Total time ~3 minutes.
 
@@ -87,14 +87,17 @@ Pushes that only touch `README.md`, `docs/`, `scripts/`, `LICENSE`, etc. are **s
 
 ### Manual minor / major bumps
 
-Auto-bump always increments the patch number. To bump minor or major:
+Auto-bump always increments the patch number. To release a minor or major version, tag the
+commit yourself and push the tag with it; a commit that already has a `v*` tag is released as
+exactly that version, and later pushes count up from it:
 
 ```bash
-git tag v0.2.0          # next code push will then auto-bump to v0.2.1
-git push origin v0.2.0
+git tag -a v1.1.0 -m "Release v1.1.0"
+git push origin master v1.1.0
 ```
 
-Pushing a tag manually does NOT trigger the workflow (the workflow only listens to branch pushes). Your next regular `git push origin master` to app code will pick up `v0.2.0` as the latest tag and auto-bump from there.
+WristLink started over at `v1.0.0` with the package rename (`com.watchbridge` → `com.wristlink`);
+the `v0.1.x` releases were the old package and are gone.
 
 ### Skipping a release for an app-code change
 
@@ -105,9 +108,9 @@ If you need to push app code without a release (e.g. mid-refactor on master), in
 To test the release config without pushing a tag:
 
 ```bash
-export KEYSTORE_PATH=/path/to/watchbridge-release.keystore
+export KEYSTORE_PATH=/path/to/wristlink-release.keystore
 export KEYSTORE_PASSWORD=...
-export KEY_ALIAS=watchbridge
+export KEY_ALIAS=wristlink
 export KEY_PASSWORD=...
 
 ./gradlew :app:assembleRelease

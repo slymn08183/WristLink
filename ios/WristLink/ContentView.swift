@@ -496,6 +496,15 @@ private struct SettingsTab: View {
     private static let timeouts = [5, 10, 15, 30, 60, 120, 300]
     private static let fontScales: [Double] = [0.85, 1.0, 1.15, 1.3]
 
+    /// "0.1.19" stays; a build between releases ("0.1.19-3-gabc1234", from git describe) reads
+    /// "0.1.19 + 3 commits".
+    private static func readableVersion(_ version: String) -> String {
+        let parts = version.split(separator: "-")
+        guard parts.count >= 3, let ahead = Int(parts[parts.count - 2]) else { return version }
+        let base = parts.dropLast(2).joined(separator: "-")
+        return "\(base) + \(ahead) commit\(ahead == 1 ? "" : "s")"
+    }
+
     var body: some View {
         NavigationStack {
             Group {
@@ -663,7 +672,7 @@ private struct SettingsTab: View {
             }
 
             Section {
-                if let app = link.info?.app { LabeledContent("Watch app", value: app) }
+                if let app = link.info?.app { LabeledContent("Watch app", value: Self.readableVersion(app)) }
                 LabeledContent("iPhone app", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "–")
                 Button("Use a different watch", role: .destructive) { link.forgetWatch() }
             } header: {

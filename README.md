@@ -8,10 +8,43 @@ Samsung and Google don't support Galaxy Watch 4 and newer on iPhone. WristLink m
 talking to the Bluetooth services iOS already offers every accessory, the same way Garmin and
 other wearables do, and adds an iPhone companion app for what iOS doesn't share on its own.
 
-> WristLink is a fork of [WatchBridge](https://github.com/WasThatRudy/watchbridge) by Raj Tiwari,
-> which did the hard groundwork on iOS's notification and media services. The original
-> documentation is in [docs/upstream-README.md](docs/upstream-README.md) and its plan in
-> [docs/upstream-plan.md](docs/upstream-plan.md).
+> WristLink is built on [WatchBridge](https://github.com/WasThatRudy/watchbridge) by Raj Tiwari.
+> Its original documentation is in [docs/upstream-README.md](docs/upstream-README.md) and its
+> plan in [docs/upstream-plan.md](docs/upstream-plan.md).
+
+## What WristLink adds
+
+WatchBridge is the base: iOS's notification and media services (ANCS, AMS) on Wear OS, call
+alerts, the camera remote, the rest timer, in-app updates, the adb installers and the release
+workflow. WristLink adds over 40 commits on top, about 11,400 lines in the watch app and a new
+6,300-line iPhone app:
+
+- **An iPhone app with its own link to the watch.** SwiftUI app that talks to a GATT service on
+  the watch over the connection iOS already keeps for notifications, so the watch never has to
+  advertise and the app keeps working in the background. Newline-framed JSON over MTU-sized
+  notifications, with acknowledged batches so nothing is lost when the link drops
+  ([protocol](docs/companion-protocol.md)).
+- **A health platform on the watch**, on Wear OS Health Services: 90 days of history in SQLite,
+  activity rings, resting heart rate against the normal range for age and sex, a sleep score,
+  coaching alerts, tiles and complications.
+- **Workouts:** Health Services exercise sessions with live screens, heart-rate zones, laps and a
+  summary, recorded with their GPS route.
+- **Apple Health sync** of samples, sleep and workouts with routes, deduplicated with HealthKit
+  sync identifiers, and an iPhone dashboard with day, week and month charts (Swift Charts) that
+  keeps history beyond the watch's 90 days.
+- **Two watch faces** on the Jetpack Watch Face library, with the iPhone's weather built in and
+  burn-in care for Always On; weather and daylight complications for any face.
+- **Album art and app icons through the iPhone**, so the watch doesn't need Wi-Fi for them.
+- **Measured, not guessed:** notification delay and link-drop stats on the watch; a low-power BLE
+  connection interval that brought WristLink to 0.2% of an overnight drain (batterystats); an
+  experiment that measured at 8% of a day was switched off.
+- **iPhone builds without a Mac:** GitHub Actions on macOS runners build, ad-hoc sign and publish
+  the app as a SideStore source, so the iPhone installs updates itself.
+- **Versions from git** (`git describe` and the commit count), so a local build and the release
+  of the same commit always agree and the watch's updater never offers a downgrade.
+- **Its own name:** the package moved from `com.watchbridge` to `com.wristlink`, with a one-time
+  hand-over of the watch's data from the old package (signature-checked provider) so nothing
+  was lost.
 
 ## What works
 
@@ -104,14 +137,14 @@ their own. On the iPhone, updates come through SideStore (see below).
 The permissions the installer grants, for reference:
 
 ```sh
-dumpsys deviceidle whitelist +com.watchbridge                 # stay connected in the background
-cmd appops set com.watchbridge RUN_ANY_IN_BACKGROUND allow
-cmd appops set com.watchbridge REQUEST_INSTALL_PACKAGES allow  # in-app updates
-pm grant com.watchbridge android.permission.ACTIVITY_RECOGNITION    # sleep detection
-cmd notification allow_dnd com.watchbridge                          # quiet while asleep
-pm grant com.watchbridge android.permission.WRITE_SECURE_SETTINGS   # watch settings from WristLink / iPhone
-cmd appops set com.watchbridge WRITE_SETTINGS allow
-pm grant com.watchbridge android.permission.BODY_SENSORS              # heart rate (Wear OS 6 also: health.READ_HEART_RATE)
+dumpsys deviceidle whitelist +com.wristlink                 # stay connected in the background
+cmd appops set com.wristlink RUN_ANY_IN_BACKGROUND allow
+cmd appops set com.wristlink REQUEST_INSTALL_PACKAGES allow  # in-app updates
+pm grant com.wristlink android.permission.ACTIVITY_RECOGNITION    # sleep detection
+cmd notification allow_dnd com.wristlink                          # quiet while asleep
+pm grant com.wristlink android.permission.WRITE_SECURE_SETTINGS   # watch settings from WristLink / iPhone
+cmd appops set com.wristlink WRITE_SETTINGS allow
+pm grant com.wristlink android.permission.BODY_SENSORS              # heart rate (Wear OS 6 also: health.READ_HEART_RATE)
 ```
 
 ### iPhone app (optional)
@@ -143,8 +176,8 @@ docs/       Protocol, release process, health plan, upstream documentation
 ```
 
 Watch builds: `./gradlew assembleDebug` (installs next to the release app as
-`com.watchbridge.debug`). Every push to `master` that changes the watch app publishes a signed
-release (`v0.1.x`) that the watch's updater picks up; versions come from git, so a local build
+`com.wristlink.debug`). Every push to `master` that changes the watch app publishes a signed
+release (`v1.x.y`) that the watch's updater picks up; versions come from git, so a local build
 and the release of the same commit agree. See [docs/RELEASING.md](docs/RELEASING.md).
 
 iPhone builds run in GitHub Actions (`.github/workflows/ios.yml`) and land in the

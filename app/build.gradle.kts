@@ -10,11 +10,11 @@ fun git(vararg args: String): String? = runCatching {
 }.getOrNull()?.takeIf { it.isNotEmpty() }
 
 android {
-    namespace = "com.watchbridge"
+    namespace = "com.wristlink"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.watchbridge"
+        applicationId = "com.wristlink"
         minSdk = 30
         targetSdk = 34
         // Both come from git, so a local build and the release of the same commit agree and

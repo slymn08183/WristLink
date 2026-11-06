@@ -1,0 +1,483 @@
+package com.wristlink.ui.screens
+
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import android.content.Intent
+import android.util.Log
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.wear.compose.foundation.lazy.AutoCenteringParams
+import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
+import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
+import androidx.wear.compose.material.Chip
+import androidx.wear.compose.material.ChipDefaults
+import androidx.wear.compose.material.Icon
+import androidx.wear.compose.material.MaterialTheme
+import androidx.wear.compose.material.Text
+import androidx.wear.compose.material.ToggleChip
+import androidx.wear.compose.material.ToggleChipDefaults
+import com.wristlink.R
+import com.wristlink.health.HealthCollector
+import com.wristlink.diagnostics.LinkStats
+import com.wristlink.notification.NotificationIcons
+import com.wristlink.settings.SettingsManager
+import com.wristlink.sleep.SleepGuard
+import com.wristlink.ui.components.WristLinkScaffold
+import com.wristlink.call.WatchCalls
+import com.wristlink.update.AppUpdater
+import kotlin.math.roundToInt
+
+@Composable
+fun SettingsScreen(settings: SettingsManager, onOpenStats: () -> Unit) {
+    val vibration by settings.vibrationEnabled.collectAsState()
+    val respectDnd by settings.respectDnd.collectAsState()
+    val showPreExisting by settings.showPreExisting.collectAsState()
+    val showSilent by settings.showSilent.collectAsState()
+    val showPhoneInfo by settings.showPhoneInfo.collectAsState()
+    val callsOnWatch by settings.callsOnWatch.collectAsState()
+    val phoneBatteryAlert by settings.phoneBatteryAlert.collectAsState()
+    val statusNotification by settings.statusNotification.collectAsState()
+    val sleepGuard by settings.sleepGuard.collectAsState()
+    val disconnectAlert by settings.disconnectAlert.collectAsState()
+    val watchDetectsSleep by HealthCollector.platformSleepSupported.collectAsState()
+
+    val categoryFilters = settings.getAllCategoryFilters()
+    val listState = rememberScalingLazyListState()
+
+    val context = LocalContext.current
+    // Turning "Answer calls on watch" on needs the phone permissions first
+    val callPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results -> settings.setCallsOnWatch(results.values.all { it }) }
+    val updateState by AppUpdater.state.collectAsState()
+    var canInstall by remember { mutableStateOf(AppUpdater.canInstallUpdates(context)) }
+    var showAdbHint by remember { mutableStateOf(false) }
+    val openInstallSettings = {
+        if (!AppUpdater.openInstallPermissionSettings(context)) showAdbHint = true
+    }
+
+    // The system's install confirmation, opened from this screen so it goes on top of WristLink
+    // in the same task (from the background, Wear OS put WristLink back over it). Once per
+    // request; after that the chip opens it again.
+    val confirmInstall: (Intent) -> Unit = { confirm ->
+        runCatching { context.startActivity(confirm) }
+            .onFailure { Log.w("SettingsScreen", "Couldn't open the install screen", it) }
+    }
+    LaunchedEffect(updateState) {
+        (updateState as? AppUpdater.State.NeedsConfirmation)?.let { confirmInstall(it.confirm) }
+    }
+
+    // Check once when Settings opens, so an available update shows up right away
+    LaunchedEffect(Unit) {
+        if (AppUpdater.state.value == AppUpdater.State.Idle) AppUpdater.checkForUpdate(context)
+    }
+    // Back from the system "Install unknown apps" screen: refresh, and continue a waiting update
+    LifecycleResumeEffect(Unit) {
+        canInstall = AppUpdater.canInstallUpdates(context)
+        val waiting = AppUpdater.state.value as? AppUpdater.State.NeedsInstallPermission
+        if (waiting != null && canInstall) AppUpdater.downloadAndInstall(context, waiting.release)
+        onPauseOrDispose { }
+    }
+
+    WristLinkScaffold(listState = listState) {
+        ScalingLazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            state = listState,
+            horizontalAlignment = Alignment.CenterHorizontally,
+            contentPadding = PaddingValues(top = 28.dp, start = 10.dp, end = 10.dp, bottom = 48.dp),
+            autoCentering = AutoCenteringParams()
+        ) {
+            item {
+                Text(
+                    text = "Settings",
+                    style = MaterialTheme.typography.title3,
+                    color = MaterialTheme.colors.primary,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+            }
+
+            item {
+                val stats by LinkStats.summary.collectAsState()
+                Chip(
+                    onClick = onOpenStats,
+                    label = { Text("Connection stats", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    secondaryLabel = {
+                        Text(
+                            text = stats.medianDelayMs?.let { "Typical delay ${if (it < 1000) "<1" else it / 1000} s" }
+                                ?: "Delay, drops, uptime",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    },
+                    icon = {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_bluetooth),
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    },
+                    colors = ChipDefaults.secondaryChipColors(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            item { SectionHeader("UPDATES") }
+
+            item {
+                UpdateChip(
+                    state = updateState,
+                    installedVersion = remember { AppUpdater.installedVersion(context) },
+                    onCheck = { AppUpdater.checkForUpdate(context) },
+                    onInstall = { AppUpdater.downloadAndInstall(context, it) },
+                    onAllowInstalls = openInstallSettings,
+                    onConfirm = confirmInstall
+                )
+            }
+
+            (updateState as? AppUpdater.State.Failed)?.let { failed ->
+                item { HintText(failed.message) }
+            }
+
+            item {
+                Chip(
+                    onClick = openInstallSettings,
+                    label = { Text("Allow updates", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    secondaryLabel = {
+                        Text(
+                            text = if (canInstall) "Allowed" else "Tap to allow",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    },
+                    icon = {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_install_apps),
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    },
+                    colors = ChipDefaults.secondaryChipColors(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            if (showAdbHint && !canInstall) {
+                item {
+                    HintText(
+                        "This watch has no screen for it. Allow it once from a computer:\n" +
+                            AppUpdater.installPermissionAdbCommand(context)
+                    )
+                }
+            }
+
+            // General settings header
+            item { SectionHeader("GENERAL") }
+
+            item {
+                SettingsToggle(
+                    label = "Vibration",
+                    secondaryLabel = "For notifications. Calls always buzz",
+                    checked = vibration,
+                    onCheckedChange = { settings.setVibrationEnabled(it) }
+                )
+            }
+
+            item {
+                SettingsToggle(
+                    label = "Hide during DND",
+                    secondaryLabel = "While the watch is on DND, only calls show",
+                    checked = respectDnd,
+                    onCheckedChange = { settings.setRespectDnd(it) }
+                )
+            }
+
+            item {
+                SettingsToggle(
+                    label = "Battery alert",
+                    secondaryLabel = "Buzz when the phone is below 20%",
+                    checked = phoneBatteryAlert,
+                    onCheckedChange = { settings.setPhoneBatteryAlert(it) }
+                )
+            }
+
+            item {
+                SettingsToggle(
+                    label = "Show older",
+                    secondaryLabel = "Include ones from before connecting",
+                    checked = showPreExisting,
+                    onCheckedChange = { settings.setShowPreExisting(it) }
+                )
+            }
+
+            item {
+                SettingsToggle(
+                    label = "Show silent",
+                    secondaryLabel = "Show silenced notifications",
+                    checked = showSilent,
+                    onCheckedChange = { settings.setShowSilent(it) }
+                )
+            }
+
+            item {
+                SettingsToggle(
+                    label = "Calls on watch",
+                    secondaryLabel = "Talk through the watch",
+                    checked = callsOnWatch && WatchCalls.hasPermissions(context),
+                    onCheckedChange = { enable ->
+                        if (enable && !WatchCalls.hasPermissions(context)) {
+                            callPermissionLauncher.launch(WatchCalls.PERMISSIONS)
+                        } else {
+                            settings.setCallsOnWatch(enable)
+                        }
+                    }
+                )
+            }
+
+            if (callsOnWatch) {
+                item {
+                    HintText("For call audio, tap this watch once in the phone's Bluetooth settings")
+                }
+            }
+
+            item {
+                SettingsToggle(
+                    label = "Disconnect alert",
+                    secondaryLabel = "Buzz when the iPhone is gone for a minute",
+                    checked = disconnectAlert,
+                    onCheckedChange = { settings.setDisconnectAlert(it) }
+                )
+            }
+
+            item {
+                SettingsToggle(
+                    label = "Quiet while asleep",
+                    secondaryLabel = when {
+                        !sleepGuard -> "DND and no wrist wake while you sleep"
+                        !SleepGuard.hasControl(context) -> "Needs permissions via adb"
+                        SleepGuard.isAsleep(context) -> "On · quiet now, you're asleep"
+                        watchDetectsSleep == true -> "On · when the watch sees you sleep"
+                        else -> "On · 22:00–10:00 when still"
+                    },
+                    checked = sleepGuard,
+                    onCheckedChange = {
+                        settings.setSleepGuard(it)
+                        SleepGuard.schedule(context)
+                    }
+                )
+            }
+
+            item {
+                SettingsToggle(
+                    label = "Status notification",
+                    secondaryLabel = if (statusNotification) "Most reliable connection" else "Hidden. Check stats for drops",
+                    checked = statusNotification,
+                    onCheckedChange = { settings.setStatusNotification(it) }
+                )
+            }
+
+            item {
+                SettingsToggle(
+                    label = "Phone info on tile",
+                    secondaryLabel = "Name and battery on the tile",
+                    checked = showPhoneInfo,
+                    onCheckedChange = { settings.setShowPhoneInfo(it) }
+                )
+            }
+
+            // Category filters header
+            item { SectionHeader("CATEGORIES") }
+
+            for ((catId, catName) in SettingsManager.CATEGORIES) {
+                item {
+                    CategoryToggle(
+                        label = catName,
+                        categoryId = catId,
+                        checked = categoryFilters[catId] ?: true,
+                        onCheckedChange = { settings.setCategoryEnabled(catId, it) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun UpdateChip(
+    state: AppUpdater.State,
+    installedVersion: String,
+    onCheck: () -> Unit,
+    onInstall: (AppUpdater.Release) -> Unit,
+    onAllowInstalls: () -> Unit,
+    onConfirm: (Intent) -> Unit
+) {
+    // label, detail, and what tapping does (null = busy, not tappable)
+    val (label, detail, onClick) = when (state) {
+        AppUpdater.State.Idle ->
+            Triple("Check for updates", "Version $installedVersion", onCheck)
+        AppUpdater.State.Checking ->
+            Triple("Checking…", "Version $installedVersion", null)
+        is AppUpdater.State.UpToDate ->
+            Triple("Up to date", "Version $installedVersion", onCheck)
+        is AppUpdater.State.Available -> Triple(
+            "Update to ${state.release.version}",
+            "${formatMegabytes(state.release.apkSizeBytes)} · tap to install",
+            { onInstall(state.release) }
+        )
+        is AppUpdater.State.Downloading -> Triple(
+            "Downloading ${(state.progress * 100).roundToInt()}%",
+            "Version ${state.release.version}",
+            null
+        )
+        is AppUpdater.State.Installing ->
+            Triple("Installing…", "Version ${state.release.version}", null)
+        is AppUpdater.State.NeedsConfirmation -> Triple(
+            "Confirm the update",
+            "Tap if the install screen is gone",
+            { onConfirm(state.confirm) }
+        )
+        is AppUpdater.State.NeedsInstallPermission ->
+            Triple("Allow installing updates", "Then the update continues", onAllowInstalls)
+        is AppUpdater.State.Failed -> Triple(
+            "Update failed",
+            "Tap to try again",
+            state.release?.let { release -> { onInstall(release) } } ?: onCheck
+        )
+    }
+
+    Chip(
+        onClick = { onClick?.invoke() },
+        enabled = onClick != null,
+        label = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        secondaryLabel = { Text(detail, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        icon = {
+            Icon(
+                painter = painterResource(R.drawable.ic_system_update),
+                contentDescription = null,
+                modifier = Modifier.size(18.dp)
+            )
+        },
+        colors = if (state is AppUpdater.State.Available) {
+            ChipDefaults.primaryChipColors()
+        } else {
+            ChipDefaults.secondaryChipColors()
+        },
+        modifier = Modifier.fillMaxWidth()
+    )
+}
+
+@Composable
+private fun HintText(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.caption3,
+        color = MaterialTheme.colors.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+    )
+}
+
+private fun formatMegabytes(bytes: Long): String =
+    if (bytes > 0) "%.1f MB".format(bytes / 1_048_576f) else "Unknown size"
+
+@Composable
+private fun SectionHeader(title: String) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.caption1.copy(letterSpacing = 1.5.sp),
+        color = MaterialTheme.colors.primary,
+        modifier = Modifier.padding(top = 12.dp, bottom = 4.dp)
+    )
+}
+
+@Composable
+private fun SettingsToggle(
+    label: String,
+    secondaryLabel: String? = null,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    ToggleChip(
+        checked = checked,
+        onCheckedChange = onCheckedChange,
+        label = {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.body2,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        },
+        secondaryLabel = if (secondaryLabel != null) {
+            {
+                Text(
+                    text = secondaryLabel,
+                    style = MaterialTheme.typography.caption3,
+                    color = MaterialTheme.colors.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        } else null,
+        toggleControl = {
+            Icon(
+                imageVector = ToggleChipDefaults.switchIcon(checked = checked),
+                contentDescription = if (checked) "On" else "Off"
+            )
+        },
+        modifier = Modifier.fillMaxWidth()
+    )
+}
+
+@Composable
+private fun CategoryToggle(
+    label: String,
+    categoryId: Byte,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    ToggleChip(
+        checked = checked,
+        onCheckedChange = onCheckedChange,
+        label = {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.body2,
+                maxLines = 1
+            )
+        },
+        appIcon = {
+            Icon(
+                painter = painterResource(NotificationIcons.iconForCategory(categoryId)),
+                contentDescription = null,
+                modifier = Modifier.size(18.dp)
+            )
+        },
+        toggleControl = {
+            Icon(
+                imageVector = ToggleChipDefaults.switchIcon(checked = checked),
+                contentDescription = if (checked) "On" else "Off"
+            )
+        },
+        modifier = Modifier.fillMaxWidth()
+    )
+}

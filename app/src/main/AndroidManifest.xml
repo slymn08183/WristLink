@@ -69,18 +69,17 @@
     <!-- Declare BLE feature -->
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
 
+    <!-- The app under its old name, whose data LegacyImport takes over once -->
+    <queries>
+        <package android:name="com.watchbridge" />
+    </queries>
+
     <application
-        android:name=".WatchBridgeApp"
+        android:name=".WristLinkApp"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.DeviceDefault">
-
-        <!-- One-time hand-over of this app's data to com.wristlink (same signing key only) -->
-        <provider
-            android:name=".ExportProvider"
-            android:authorities="com.watchbridge.export"
-            android:exported="true" />
 
         <!-- Wear OS standalone flag — no companion app required -->
         <meta-data
@@ -103,7 +102,7 @@
             android:exported="true"
             android:icon="@drawable/ic_launcher_media"
             android:label="@string/media_app_name"
-            android:taskAffinity="com.watchbridge.media">
+            android:taskAffinity="com.wristlink.media">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -116,7 +115,7 @@
             android:exported="true"
             android:icon="@drawable/ic_launcher_camera"
             android:label="@string/camera_app_name"
-            android:taskAffinity="com.watchbridge.camera">
+            android:taskAffinity="com.wristlink.camera">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -129,7 +128,7 @@
             android:exported="true"
             android:icon="@drawable/ic_launcher_timer"
             android:label="@string/timer_app_name"
-            android:taskAffinity="com.watchbridge.timer">
+            android:taskAffinity="com.wristlink.timer">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -143,7 +142,7 @@
             android:icon="@drawable/ic_launcher_workout"
             android:label="@string/workout_app_name"
             android:launchMode="singleTask"
-            android:taskAffinity="com.watchbridge.workout">
+            android:taskAffinity="com.wristlink.workout">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -176,7 +175,7 @@
             android:launchMode="singleInstance" />
 
         <service
-            android:name=".service.WatchBridgeService"
+            android:name=".service.WristLinkService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
 
@@ -379,7 +378,7 @@
             android:exported="true"
             android:icon="@drawable/ic_launcher_health"
             android:label="@string/health_app_name"
-            android:taskAffinity="com.watchbridge.health">
+            android:taskAffinity="com.wristlink.health">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

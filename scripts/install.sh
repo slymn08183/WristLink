@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# WatchBridge installer for macOS / Linux — a step-by-step guide.
+# WristLink installer for macOS / Linux — a step-by-step guide.
 #
-# Downloads the latest WatchBridge from GitHub Releases and installs it on the watch.
+# Downloads the latest WristLink from GitHub Releases and installs it on the watch.
 # Run it straight from GitHub:
 #   bash <(curl -fsSL https://raw.githubusercontent.com/slymn08183/WristLink/master/scripts/install.sh)
 # or download it and run:  ./install.sh
-# To install a specific version instead, put its watchbridge-X.Y.Z.apk next to this script.
+# To install a specific version instead, put its wristlink-X.Y.Z.apk next to this script.
 
 set -uo pipefail
 
-PACKAGE="com.watchbridge"
+PACKAGE="com.wristlink"
 REPO="slymn08183/WristLink"
 RELEASES_URL="https://github.com/$REPO/releases/latest"
 TOTAL_STEPS=6
@@ -61,10 +61,10 @@ quit() {
 
 clear 2>/dev/null || true
 echo
-echo "${BOLD}  WatchBridge installer${RESET}"
+echo "${BOLD}  WristLink installer${RESET}"
 echo "  ${DIM}Phone notifications, calls and music controls on your Galaxy Watch${RESET}"
 echo
-say "This guide downloads the latest WatchBridge and installs it on your watch,"
+say "This guide downloads the latest WristLink and installs it on your watch,"
 say "one step at a time."
 say "It takes about 3 minutes. You'll need:"
 say "  • your watch, charged, with Wi-Fi on"
@@ -76,14 +76,14 @@ say "Type ${BOLD}q${RESET} at any question to stop."
 # --- Checks -------------------------------------------------------------------
 
 # An APK next to the script wins (to install a specific version); otherwise get the latest
-APK="$(ls -1 "$SCRIPT_DIR"/watchbridge-*.apk 2>/dev/null | tail -1 || true)"
+APK="$(ls -1 "$SCRIPT_DIR"/wristlink-*.apk 2>/dev/null | tail -1 || true)"
 echo
 if [ -n "$APK" ]; then
   ok "Using $(basename "$APK") from this folder"
 else
-  say "Getting the latest WatchBridge from GitHub..."
+  say "Getting the latest WristLink from GitHub..."
   if ! command -v curl >/dev/null 2>&1; then
-    fail "'curl' is needed to download WatchBridge."
+    fail "'curl' is needed to download WristLink."
     say "Or download the .apk from $RELEASES_URL, put it next to this script and run it again."
     exit 1
   fi
@@ -92,7 +92,7 @@ else
     | grep -o '"browser_download_url": *"[^"]*\.apk"' | head -1 \
     | sed 's/.*"\(https[^"]*\)"$/\1/')"
   if [ -z "$APK_URL" ]; then
-    fail "Couldn't find WatchBridge on GitHub."
+    fail "Couldn't find WristLink on GitHub."
     say "Check the internet connection, or download the .apk from $RELEASES_URL,"
     say "put it next to this script and run it again."
     exit 1
@@ -106,9 +106,9 @@ else
 fi
 
 # adb (Android platform-tools) is what talks to the watch. If it's missing, offer Google's
-# official download into a WatchBridge folder (no Homebrew, sudo or admin rights needed);
+# official download into a WristLink folder (no Homebrew, sudo or admin rights needed);
 # later runs reuse it.
-TOOLS_DIR="$HOME/.watchbridge"
+TOOLS_DIR="$HOME/.wristlink"
 [ -x "$TOOLS_DIR/platform-tools/adb" ] && export PATH="$TOOLS_DIR/platform-tools:$PATH"
 
 if ! command -v adb >/dev/null 2>&1; then
@@ -253,16 +253,16 @@ fi  # SKIP_PAIRING
 
 # --- Step 5: Install ----------------------------------------------------------
 
-step 5 "Install WatchBridge"
+step 5 "Install WristLink"
 say "Installing $(basename "$APK") on the watch..."
 INSTALL_OUTPUT="$(adb -s "$CONN_ADDR" install -r "$APK" 2>&1)"
 
 if [[ "$INSTALL_OUTPUT" == *INSTALL_FAILED_UPDATE_INCOMPATIBLE* || "$INSTALL_OUTPUT" == *"signatures do not match"* ]]; then
   echo
-  warn "A different build of WatchBridge is already on the watch (signed with another key),"
+  warn "A different build of WristLink is already on the watch (signed with another key),"
   say "  so this one can't be installed over it. Removing it first fixes that;"
   say "  you'll pair your iPhone again afterwards."
-  if ask_yes_no "Remove the old WatchBridge and install this one?"; then
+  if ask_yes_no "Remove the old WristLink and install this one?"; then
     adb -s "$CONN_ADDR" uninstall "$PACKAGE" >/dev/null 2>&1
     INSTALL_OUTPUT="$(adb -s "$CONN_ADDR" install "$APK" 2>&1)"
   else
@@ -276,9 +276,9 @@ if [[ "$INSTALL_OUTPUT" != *Success* ]]; then
   say "Keep the watch screen on and try running the installer again."
   exit 1
 fi
-ok "WatchBridge is installed"
+ok "WristLink is installed"
 
-# Lets WatchBridge install its own updates later (Settings → Updates).
+# Lets WristLink install its own updates later (Settings → Updates).
 # Wear OS has no on-watch screen for this permission.
 adb -s "$CONN_ADDR" shell appops set "$PACKAGE" REQUEST_INSTALL_PACKAGES allow >/dev/null 2>&1 \
   && ok "Future updates can be installed from the watch itself"
@@ -305,18 +305,18 @@ adb -s "$CONN_ADDR" shell pm grant "$PACKAGE" android.permission.WRITE_SECURE_SE
 
 # --- Step 6: Open and pair with the iPhone ------------------------------------
 
-step 6 "Open WatchBridge and pair your iPhone"
+step 6 "Open WristLink and pair your iPhone"
 adb -s "$CONN_ADDR" shell am start -n "$PACKAGE/.MainActivity" >/dev/null 2>&1 \
-  && ok "WatchBridge is now open on the watch"
+  && ok "WristLink is now open on the watch"
 say
 say "On the ${BOLD}watch${RESET}:"
 say "  1. Tap ${BOLD}Get Started${RESET} and ${BOLD}Allow${RESET} each permission it asks for"
 say "  2. Tap ${BOLD}Connect${RESET} → ${BOLD}Start Pairing${RESET}"
 say
 say "On the ${BOLD}iPhone${RESET}:"
-say "  3. Open ${BOLD}Settings → Bluetooth${RESET} and tap ${BOLD}WatchBridge${RESET}, then ${BOLD}Pair${RESET}"
-say "  4. Tap the ${BOLD}(i)${RESET} next to WatchBridge and turn on ${BOLD}Share System Notifications${RESET}"
-say "  5. For calls on the watch: in ${BOLD}Settings → Bluetooth${RESET}, WatchBridge should say"
+say "  3. Open ${BOLD}Settings → Bluetooth${RESET} and tap ${BOLD}WristLink${RESET}, then ${BOLD}Pair${RESET}"
+say "  4. Tap the ${BOLD}(i)${RESET} next to WristLink and turn on ${BOLD}Share System Notifications${RESET}"
+say "  5. For calls on the watch: in ${BOLD}Settings → Bluetooth${RESET}, WristLink should say"
 say "     ${BOLD}Connected${RESET} — if it says Not Connected, tap it"
 say
 say "The watch shows ${BOLD}Connected${RESET} when it's done."
@@ -330,6 +330,6 @@ echo
 say "A few tips:"
 say "  • Add the ${BOLD}Phone connection${RESET} and ${BOLD}Music Control${RESET} tiles: on the watch,"
 say "    press and hold a tile, tap + and pick them"
-say "  • New versions install from the watch: ${BOLD}WatchBridge → Settings → Updates${RESET}"
+say "  • New versions install from the watch: ${BOLD}WristLink → Settings → Updates${RESET}"
 say "  • You can turn ${BOLD}Wireless debugging${RESET} off again to save battery"
 echo

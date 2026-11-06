@@ -1,23 +1,23 @@
 @echo off
-REM WatchBridge installer for Windows - a step-by-step guide.
-REM Downloads the latest WatchBridge from GitHub Releases and installs it on the watch.
+REM WristLink installer for Windows - a step-by-step guide.
+REM Downloads the latest WristLink from GitHub Releases and installs it on the watch.
 REM Usage: double-click it. To install a specific version instead, put its
-REM watchbridge-X.Y.Z.apk next to this script.
+REM wristlink-X.Y.Z.apk next to this script.
 
 setlocal EnableDelayedExpansion
 
-set "PACKAGE=com.watchbridge"
+set "PACKAGE=com.wristlink"
 set "REPO=slymn08183/WristLink"
 set "RELEASES_URL=https://github.com/slymn08183/WristLink/releases/latest"
 set "SCRIPT_DIR=%~dp0"
-set "TMP_OUT=%TEMP%\watchbridge_install.txt"
+set "TMP_OUT=%TEMP%\wristlink_install.txt"
 
 cls
 echo.
-echo   WatchBridge installer
+echo   WristLink installer
 echo   Phone notifications, calls and music controls on your Galaxy Watch
 echo.
-echo   This guide downloads the latest WatchBridge and installs it on your watch,
+echo   This guide downloads the latest WristLink and installs it on your watch,
 echo   one step at a time.
 echo   It takes about 3 minutes. You'll need:
 echo     - your watch, charged, with Wi-Fi on
@@ -31,18 +31,18 @@ REM --- Checks -----------------------------------------------------------------
 
 REM An APK next to the script wins (to install a specific version); otherwise get the latest
 set "APK="
-for %%F in ("%SCRIPT_DIR%watchbridge-*.apk") do set "APK=%%~fF"
+for %%F in ("%SCRIPT_DIR%wristlink-*.apk") do set "APK=%%~fF"
 if defined APK (
   for %%F in ("!APK!") do echo   [OK] Using %%~nxF from this folder
   goto :have_apk
 )
 
-echo   Getting the latest WatchBridge from GitHub (about 3 MB)...
-set "APK=%TEMP%\watchbridge-latest.apk"
+echo   Getting the latest WristLink from GitHub (about 3 MB)...
+set "APK=%TEMP%\wristlink-latest.apk"
 set "APK_NAME="
-for /f "usebackq delims=" %%N in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; try { $r=Invoke-RestMethod -Uri 'https://api.github.com/repos/%REPO%/releases/latest' -Headers @{'User-Agent'='WatchBridge-installer'}; $a=$r.assets | Where-Object { $_.name -like '*.apk' } | Select-Object -First 1; Invoke-WebRequest -Uri $a.browser_download_url -OutFile (Join-Path $env:TEMP 'watchbridge-latest.apk') -UseBasicParsing; Write-Output $a.name } catch { }"`) do set "APK_NAME=%%N"
+for /f "usebackq delims=" %%N in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; try { $r=Invoke-RestMethod -Uri 'https://api.github.com/repos/%REPO%/releases/latest' -Headers @{'User-Agent'='WristLink-installer'}; $a=$r.assets | Where-Object { $_.name -like '*.apk' } | Select-Object -First 1; Invoke-WebRequest -Uri $a.browser_download_url -OutFile (Join-Path $env:TEMP 'wristlink-latest.apk') -UseBasicParsing; Write-Output $a.name } catch { }"`) do set "APK_NAME=%%N"
 if not defined APK_NAME (
-  echo   [X] Couldn't download WatchBridge from GitHub.
+  echo   [X] Couldn't download WristLink from GitHub.
   echo       Check the internet connection, or download the .apk from:
   echo       %RELEASES_URL%
   echo       put it next to install.bat and run this again.
@@ -194,7 +194,7 @@ REM --- Step 5: Install --------------------------------------------------------
 
 :install
 echo.
-echo   === Step 5 of 6 - Install WatchBridge ===
+echo   === Step 5 of 6 - Install WristLink ===
 echo.
 echo   Installing on the watch...
 adb -s !CONN_ADDR! install -r "%APK%" > "%TMP_OUT%" 2>&1
@@ -202,11 +202,11 @@ adb -s !CONN_ADDR! install -r "%APK%" > "%TMP_OUT%" 2>&1
 findstr /c:"INSTALL_FAILED_UPDATE_INCOMPATIBLE" /c:"signatures do not match" "%TMP_OUT%" >nul
 if not errorlevel 1 (
   echo.
-  echo   [!] A different build of WatchBridge is already on the watch ^(signed with another key^),
+  echo   [!] A different build of WristLink is already on the watch ^(signed with another key^),
   echo       so this one can't be installed over it. Removing it first fixes that;
   echo       you'll pair your iPhone again afterwards.
   set "ANSWER="
-  set /p "ANSWER=  Remove the old WatchBridge and install this one? [y/N] "
+  set /p "ANSWER=  Remove the old WristLink and install this one? [y/N] "
   if /i not "!ANSWER:~0,1!"=="y" goto :quit
   adb -s !CONN_ADDR! uninstall %PACKAGE% >nul 2>&1
   adb -s !CONN_ADDR! install "%APK%" > "%TMP_OUT%" 2>&1
@@ -219,9 +219,9 @@ if errorlevel 1 (
   echo   Keep the watch screen on and try running the installer again.
   goto :end_fail
 )
-echo   [OK] WatchBridge is installed
+echo   [OK] WristLink is installed
 
-REM Lets WatchBridge install its own updates later (Settings -^> Updates).
+REM Lets WristLink install its own updates later (Settings -^> Updates).
 REM Wear OS has no on-watch screen for this permission.
 adb -s !CONN_ADDR! shell appops set %PACKAGE% REQUEST_INSTALL_PACKAGES allow >nul 2>&1
 if not errorlevel 1 echo   [OK] Future updates can be installed from the watch itself
@@ -246,19 +246,19 @@ if not errorlevel 1 echo   [OK] Watch settings can be changed from WristLink and
 REM --- Step 6: Open and pair with the iPhone ----------------------------------
 
 echo.
-echo   === Step 6 of 6 - Open WatchBridge and pair your iPhone ===
+echo   === Step 6 of 6 - Open WristLink and pair your iPhone ===
 echo.
 adb -s !CONN_ADDR! shell am start -n %PACKAGE%/.MainActivity >nul 2>&1
-if not errorlevel 1 echo   [OK] WatchBridge is now open on the watch
+if not errorlevel 1 echo   [OK] WristLink is now open on the watch
 echo.
 echo   On the WATCH:
 echo     1. Tap "Get Started" and "Allow" each permission it asks for
 echo     2. Tap "Connect" -^> "Start Pairing"
 echo.
 echo   On the iPHONE:
-echo     3. Open Settings -^> Bluetooth and tap "WatchBridge", then "Pair"
-echo     4. Tap the (i) next to WatchBridge and turn on "Share System Notifications"
-echo     5. For calls on the watch: in Settings -^> Bluetooth, WatchBridge should say
+echo     3. Open Settings -^> Bluetooth and tap "WristLink", then "Pair"
+echo     4. Tap the (i) next to WristLink and turn on "Share System Notifications"
+echo     5. For calls on the watch: in Settings -^> Bluetooth, WristLink should say
 echo        "Connected" - if it says "Not Connected", tap it
 echo.
 echo   The watch shows "Connected" when it's done.
@@ -273,7 +273,7 @@ echo.
 echo   A few tips:
 echo     - Add the "Phone connection" and "Music Control" tiles: on the watch,
 echo       press and hold a tile, tap + and pick them
-echo     - New versions install from the watch: WatchBridge -^> Settings -^> Updates
+echo     - New versions install from the watch: WristLink -^> Settings -^> Updates
 echo     - You can turn Wireless debugging off again to save battery
 echo.
 del "%TMP_OUT%" >nul 2>&1

@@ -15,5 +15,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "WatchBridge"
+rootProject.name = "WristLink"
 include(":app")

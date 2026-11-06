@@ -36,17 +36,24 @@ jobs:
         id: version
         run: |
           git fetch --tags --quiet
-          LATEST=$(git tag -l 'v*' --sort=-v:refname | head -1)
-          if [ -z "$LATEST" ]; then
-            LATEST="v0.0.0"
+          # A commit tagged by hand (say v1.0.0) is released as that version; otherwise the
+          # latest tag's patch number goes up by one
+          OWN=$(git tag --points-at HEAD -l 'v*' --sort=-v:refname | head -1)
+          if [ -n "$OWN" ]; then
+            NEW_TAG="$OWN"
+            echo "TAG_EXISTS=true" >> "$GITHUB_ENV"
+          else
+            LATEST=$(git tag -l 'v*' --sort=-v:refname | head -1)
+            if [ -z "$LATEST" ]; then
+              LATEST="v0.0.0"
+            fi
+            BASE="${LATEST#v}"
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE"
+            NEW_TAG="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+            echo "Latest tag: $LATEST"
           fi
-          BASE="${LATEST#v}"
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE"
-          NEXT_PATCH=$((PATCH + 1))
-          NEW_TAG="v${MAJOR}.${MINOR}.${NEXT_PATCH}"
-          NEW_VERSION="${MAJOR}.${MINOR}.${NEXT_PATCH}"
-          echo "Latest tag: $LATEST"
-          echo "Next tag:   $NEW_TAG"
+          NEW_VERSION="${NEW_TAG#v}"
+          echo "Releasing: $NEW_TAG"
           echo "VERSION_NAME=${NEW_VERSION}" >> "$GITHUB_ENV"
           # Same as a local build of this commit (app/build.gradle.kts), so the two always agree
           echo "VERSION_CODE=$(git rev-list --count HEAD)" >> "$GITHUB_ENV"
@@ -85,7 +92,7 @@ jobs:
         run: |
           mkdir -p release-assets
           cp app/build/outputs/apk/release/app-release.apk \
-             "release-assets/watchbridge-${VERSION_NAME}.apk"
+             "release-assets/wristlink-${VERSION_NAME}.apk"
           cp scripts/install.sh release-assets/
           cp scripts/install.bat release-assets/
 
@@ -93,10 +100,11 @@ jobs:
         run: |
           BUILD_TOOLS=$(ls -d $ANDROID_HOME/build-tools/* | tail -1)
           "$BUILD_TOOLS/apksigner" verify --print-certs \
-            "release-assets/watchbridge-${VERSION_NAME}.apk"
+            "release-assets/wristlink-${VERSION_NAME}.apk"
 
       # Only tag once the APK is built and signed, so a failed run leaves no orphan tag
       - name: Push new tag
+        if: env.TAG_EXISTS != 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -107,11 +115,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.new_tag }}
-          name: WatchBridge ${{ steps.version.outputs.version_name }}
+          name: WristLink ${{ steps.version.outputs.version_name }}
           generate_release_notes: true
           draft: false
           prerelease: false
           files: |
-            release-assets/watchbridge-*.apk
+            release-assets/wristlink-*.apk
             release-assets/install.sh
             release-assets/install.bat
