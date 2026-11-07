@@ -151,6 +151,29 @@ fun WorkoutSummaryScreen(id: Long, onDeleted: () -> Unit) {
                     )
                 }
             }
+            if (x.has("sprints")) {
+                item {
+                    WorkoutPairCard(
+                        "Sprints", "${x.optInt("sprints")}",
+                        "Longest", WorkoutFormat.distance(x.optDouble("longestSprint", 0.0))
+                    )
+                }
+                item {
+                    WorkoutPairCard(
+                        "Sprinting", WorkoutFormat.distance(x.optDouble("sprintDistance", 0.0)),
+                        "Over 15 km/h", WorkoutFormat.distance(x.optDouble("highIntensityDistance", 0.0))
+                    )
+                }
+                x.optJSONArray("speedBands")?.let { bands ->
+                    item { SectionTitle("Speed") }
+                    item {
+                        SpeedBands(
+                            bandMs = List(4) { bands.optLong(it) * 1000 },
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
+                        )
+                    }
+                }
+            }
             if (w.elevationGain > 0 || x.has("maxAlt")) {
                 item {
                     WorkoutStatCard(

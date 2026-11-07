@@ -2,6 +2,8 @@ package com.wristlink.workout
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -59,6 +61,7 @@ private const val PAGE_MAIN = 1
 private const val PAGE_ZONES = 2
 private const val PAGE_LAPS = 3
 private const val PAGE_ROUTE = 4
+private const val PAGE_FOOTBALL = 5
 
 private val PausedColor = Color(0xFFFFD54F)
 private val FinishColor = Color(0xFFEF5350)
@@ -87,7 +90,15 @@ fun LiveWorkoutPager(live: WorkoutState.Live, onLeave: () -> Unit) {
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
     val hasRoute = live.type?.outdoor == true && live.gps != WorkoutState.Signal.NOT_USED
-    val pagerState = rememberPagerState(initialPage = PAGE_MAIN) { if (hasRoute) 5 else 4 }
+    val pages = buildList {
+        add(PAGE_CONTROLS)
+        add(PAGE_MAIN)
+        if (live.type == WorkoutType.FOOTBALL) add(PAGE_FOOTBALL)
+        add(PAGE_ZONES)
+        add(PAGE_LAPS)
+        if (hasRoute) add(PAGE_ROUTE)
+    }
+    val pagerState = rememberPagerState(initialPage = pages.indexOf(PAGE_MAIN)) { pages.size }
     val scope = rememberCoroutineScope()
     val now = rememberNow()
 
@@ -114,10 +125,11 @@ fun LiveWorkoutPager(live: WorkoutState.Live, onLeave: () -> Unit) {
     }
 
     Box(Modifier.fillMaxSize()) {
-        HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
-            when (page) {
-                PAGE_CONTROLS -> ControlsPage(live, onLap = lap, onShowMain = { scope.launch { pagerState.animateScrollToPage(PAGE_MAIN) } })
+        HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { index ->
+            when (pages.getOrNull(index)) {
+                PAGE_CONTROLS -> ControlsPage(live, onLap = lap, onShowMain = { scope.launch { pagerState.animateScrollToPage(pages.indexOf(PAGE_MAIN)) } })
                 PAGE_MAIN -> MainPage(live, now, onLap = lap)
+                PAGE_FOOTBALL -> FootballPage(live)
                 PAGE_ZONES -> ZonesPage(live)
                 PAGE_LAPS -> LapsPage(live, now, onLap = lap)
                 PAGE_ROUTE -> RoutePage(live)
@@ -182,10 +194,12 @@ private fun MainPage(live: WorkoutState.Live, now: Long, onLap: () -> Unit) {
                 Text(text = " km", style = MaterialTheme.typography.caption2, color = MaterialTheme.colors.onSurfaceVariant, modifier = Modifier.padding(bottom = 3.dp))
             }
         }
-        when (type.effort) {
-            WorkoutType.Effort.PACE -> MetricLine(WorkoutFormat.pace(WorkoutFormat.paceOf(live.speed)), "/km")
-            WorkoutType.Effort.SPEED -> MetricLine(WorkoutFormat.speedKmh(live.speed), "km/h")
-            WorkoutType.Effort.NONE -> if (live.steps > 0) MetricLine(live.steps.toString(), "steps")
+        when {
+            type == WorkoutType.FOOTBALL ->
+                MetricLine("${live.sprints}", "sprints · top ${WorkoutFormat.speedKmh(live.maxSpeed.takeIf { it > 0 })} km/h")
+            type.effort == WorkoutType.Effort.PACE -> MetricLine(WorkoutFormat.pace(WorkoutFormat.paceOf(live.speed)), "/km")
+            type.effort == WorkoutType.Effort.SPEED -> MetricLine(WorkoutFormat.speedKmh(live.speed), "km/h")
+            live.steps > 0 -> MetricLine(live.steps.toString(), "steps")
         }
         Spacer(Modifier.height(4.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -203,6 +217,54 @@ private fun MainPage(live: WorkoutState.Live, now: Long, onLap: () -> Unit) {
         }
     }
 }
+
+/** Football: sprints, top speed, distance at high intensity, and time in each speed band. */
+@Composable
+private fun FootballPage(live: WorkoutState.Live) {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(text = "${live.sprints}", style = MaterialTheme.typography.display3, color = SprintColor)
+            Text(text = " sprints", style = MaterialTheme.typography.caption2, color = MaterialTheme.colors.onSurfaceVariant, modifier = Modifier.padding(bottom = 6.dp))
+        }
+        Text(
+            text = "Top ${WorkoutFormat.speedKmh(live.maxSpeed.takeIf { it > 0 })} km/h · fast ${WorkoutFormat.distance(live.highIntensityDistance)}",
+            style = MaterialTheme.typography.caption2,
+            color = MaterialTheme.colors.onBackground
+        )
+        Spacer(Modifier.height(8.dp))
+        SpeedBands(live.speedBandMs, Modifier.fillMaxWidth())
+    }
+}
+
+/** One bar per speed band (walk, jog, run, sprint), as a share of the time moving so far. */
+@Composable
+fun SpeedBands(bandMs: List<Long>, modifier: Modifier = Modifier) {
+    val total = bandMs.sum().coerceAtLeast(1)
+    Column(modifier) {
+        SprintTracker.BAND_LABELS.forEachIndexed { i, label ->
+            val ms = bandMs.getOrElse(i) { 0L }
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 1.dp)) {
+                Text(text = label, style = MaterialTheme.typography.caption3, color = MaterialTheme.colors.onSurfaceVariant, modifier = Modifier.width(40.dp))
+                Box(Modifier.weight(1f).height(6.dp).background(Color(0x22FFFFFF), RoundedCornerShape(3.dp))) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth((ms.toFloat() / total).coerceIn(0f, 1f))
+                            .height(6.dp)
+                            .background(BandColors[i], RoundedCornerShape(3.dp))
+                    )
+                }
+                Text(text = WorkoutFormat.durationCoarse(ms), style = MaterialTheme.typography.caption3, color = MaterialTheme.colors.onBackground, textAlign = TextAlign.End, modifier = Modifier.width(38.dp))
+            }
+        }
+    }
+}
+
+private val SprintColor = Color(0xFFFFB74D)
+private val BandColors = listOf(Color(0xFF78909C), Color(0xFF4FC3F7), Color(0xFF81C784), SprintColor)
 
 @Composable
 private fun MetricLine(value: String, unit: String) {

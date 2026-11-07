@@ -34,10 +34,24 @@ struct WorkoutRecord: Codable, Identifiable {
     let laps: [Lap]?
     /// [ms, lat, lon, alt, hr, speed]; any of the last five may be null. Not kept in the index.
     var track: [[Double?]]?
+    /// The watch's extra numbers; only the football ones are read here.
+    let summary: Summary?
+
+    /// Football (SprintTracker on the watch): sprints at 20 km/h and up, meters, m/s, and the
+    /// seconds and meters walking, jogging, running and sprinting.
+    struct Summary: Codable {
+        let sprints: Int?
+        let sprintDistance: Double?
+        let longestSprint: Double?
+        let highIntensityDistance: Double?
+        let maxSpeed: Double?
+        let speedBands: [Double]?
+        let speedBandDistance: [Double]?
+    }
 
     enum CodingKeys: String, CodingKey {
         case watchId = "id"
-        case type, start, end, activeMs, distance, calories, steps, avgHr, maxHr, elevationGain, laps, track
+        case type, start, end, activeMs, distance, calories, steps, avgHr, maxHr, elevationGain, laps, track, summary
     }
 
     var id: Int64 { Int64(start) }
@@ -107,7 +121,7 @@ struct TrackPoint: Identifiable {
 enum WorkoutKind: String {
     case run, walk, hike, bike
     case bikeIndoor = "bike_indoor"
-    case treadmill, elliptical, rowing, other
+    case treadmill, elliptical, rowing, football, other
 
     init(_ raw: String?) {
         self = WorkoutKind(rawValue: raw ?? "") ?? .other
@@ -123,6 +137,7 @@ enum WorkoutKind: String {
         case .treadmill: return "Treadmill"
         case .elliptical: return "Elliptical"
         case .rowing: return "Rowing"
+        case .football: return "Football"
         case .other: return "Workout"
         }
     }
@@ -136,6 +151,7 @@ enum WorkoutKind: String {
         case .bikeIndoor: return "figure.indoor.cycle"
         case .elliptical: return "figure.elliptical"
         case .rowing: return "figure.rower"
+        case .football: return "figure.soccer"
         case .other: return "figure.mixed.cardio"
         }
     }
@@ -147,8 +163,8 @@ enum WorkoutKind: String {
         }
     }
 
-    /// Cycling shows speed; on foot shows pace.
-    var showsSpeed: Bool { self == .bike || self == .bikeIndoor }
+    /// Cycling and football show speed; on foot shows pace.
+    var showsSpeed: Bool { self == .bike || self == .bikeIndoor || self == .football }
 
     var activityType: HKWorkoutActivityType {
         switch self {
@@ -158,6 +174,7 @@ enum WorkoutKind: String {
         case .bike, .bikeIndoor: return .cycling
         case .elliptical: return .elliptical
         case .rowing: return .rowing
+        case .football: return .soccer
         case .other: return .other
         }
     }
@@ -165,7 +182,7 @@ enum WorkoutKind: String {
     /// The distance type Apple Health keeps for this activity, if any.
     var distanceType: HKQuantityTypeIdentifier? {
         switch self {
-        case .run, .walk, .hike, .treadmill: return .distanceWalkingRunning
+        case .run, .walk, .hike, .treadmill, .football: return .distanceWalkingRunning
         case .bike, .bikeIndoor: return .distanceCycling
         default: return nil
         }

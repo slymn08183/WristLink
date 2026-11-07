@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.guava.await
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import java.time.Instant
 import java.util.Calendar
 
@@ -34,6 +35,11 @@ object HealthCollector {
 
     private const val TAG = "HealthCollector"
     private const val PREFS = "health_collector"
+    private const val HR_QUEUE_INTERVAL_MS = 60_000L
+    private const val HR_QUEUE_JUMP_BPM = 15.0
+
+    /** The last heart rate queued for Apple Health; in memory, a restart just queues the next one. */
+    @Volatile private var lastQueuedHr: Pair<Long, Double>? = null
 
     private val wanted = setOf(
         DataType.STEPS_DAILY,
@@ -144,7 +150,14 @@ object HealthCollector {
             .map { it.getTimeInstant(boot).toEpochMilli() to it.value }
             .sortedBy { it.first }
         for ((t, bpm) in heartRates) {
-            store.add(HealthStore.HEART_RATE, t, t, bpm)
+            // The watch's own history keeps every reading. Apple Health gets one a minute, plus
+            // any sudden change: with the sensor measuring continuously that's ~60k readings a
+            // day otherwise, all of them sent over Bluetooth and written on the iPhone.
+            val last = lastQueuedHr
+            if (last == null || t - last.first >= HR_QUEUE_INTERVAL_MS || abs(bpm - last.second) >= HR_QUEUE_JUMP_BPM) {
+                store.add(HealthStore.HEART_RATE, t, t, bpm)
+                lastQueuedHr = t to bpm
+            }
             history.addHeartRate(t, bpm)
         }
         heartRates.lastOrNull()?.let { (t, bpm) -> LiveHealth.onHeartRate(context, t, bpm) }

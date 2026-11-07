@@ -4,8 +4,13 @@ import com.wristlink.health.HealthHistory
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.TreeMap
+import kotlin.math.asin
+import kotlin.math.cos
 import kotlin.math.max
+import kotlin.math.pow
 import kotlin.math.roundToInt
+import kotlin.math.sin
+import kotlin.math.sqrt
 import kotlin.math.roundToLong
 
 /**
@@ -74,7 +79,17 @@ class WorkoutRecorder(
 
     private val recentSpeeds = ArrayDeque<Double>()
 
-    val distance: Double get() = max(distanceTotal, runningDistance)
+    /** Sprints, top speed and speed bands (shown for football). */
+    val sprints = SprintTracker()
+    /** Whether Health Services reports speed; until it does, speed comes from GPS fixes. */
+    private var speedReported = false
+    private var lastFix: Triple<Long, Double, Double>? = null
+
+    /** Distance between GPS fixes, for types Health Services gives no distance for. */
+    private var gpsDistance = 0.0
+
+    val distance: Double
+        get() = if (haveDistanceDeltas || distanceTotal > 0) max(distanceTotal, runningDistance) else gpsDistance
 
     private fun point(t: Long): Point = points.getOrPut(t - Math.floorMod(t, 1000L)) { Point() }
 
@@ -110,12 +125,31 @@ class WorkoutRecorder(
         p.lat = lat
         p.lon = lon
         if (alt != null) p.alt = alt
+
+        // Some exercise types (football) get no speed from Health Services: work it out from
+        // consecutive fixes instead
+        val prev = lastFix
+        lastFix = Triple(t, lat, lon)
+        if (prev != null && t > prev.first && t - prev.first <= 5_000 && !pausedAt(t)) {
+            val dt = t - prev.first
+            val meters = metersBetween(prev.second, prev.third, lat, lon)
+            val v = meters / (dt / 1000.0)
+            // Standing still, GPS wanders about half a metre a second; jumps are fixes, not running
+            if (v in 0.5..(SprintTracker.MAX_KMH / 3.6)) gpsDistance += meters
+            if (!haveDistanceDeltas && distanceTotal <= 0) p.distance = gpsDistance
+            if (!speedReported && dt >= 500) {
+                if (p.speed == null) p.speed = v
+                sprints.onSpeed(t, v, false)
+            }
+        }
     }
 
     /** Returns the speed smoothed over the last few readings, for the live screen. */
     fun onSpeed(t: Long, speed: Double): Double {
         if (speed < 0 || speed > 100) return recentSpeeds.lastOrNull() ?: 0.0
+        speedReported = true
         point(t).speed = speed
+        sprints.onSpeed(t, speed, pausedAt(t))
         recentSpeeds.addLast(speed)
         while (recentSpeeds.size > 5) recentSpeeds.removeFirst()
         return recentSpeeds.average()
@@ -148,6 +182,7 @@ class WorkoutRecorder(
 
     fun pause(t: Long) {
         if (pausedSince == null) pausedSince = t
+        sprints.endSprint()
     }
 
     fun resume(t: Long) {
@@ -190,9 +225,12 @@ class WorkoutRecorder(
         val track = buildTrack()
         val activeS = activeMs / 1000.0
 
+        sprints.endSprint()
+        val football = type == WorkoutType.FOOTBALL
         val speedSamples = points.values.mapNotNull { it.speed }
-        val maxSpeed = speedSamples.windowed(3, 1, partialWindows = false) { it.average() }.maxOrNull()
-            ?: speedSamples.maxOrNull()
+        val maxSpeed = if (football && sprints.maxSpeed > 0) sprints.maxSpeed
+            else speedSamples.windowed(3, 1, partialWindows = false) { it.average() }.maxOrNull()
+                ?: speedSamples.maxOrNull()
         val avgSpeed = if (distance > 0 && activeS > 0) distance / activeS else null
 
         val alts = track.mapNotNull { it.alt }
@@ -221,8 +259,18 @@ class WorkoutRecorder(
                 put("maxAlt", alts.max().roundToInt())
             }
             put("zones", JSONArray(zoneMs.map { (it / 1000.0).roundToLong() }))
-            val splits = splits(track)
-            if (splits.length() > 0) put("splits", splits)
+            if (football) {
+                put("sprints", sprints.sprints)
+                put("sprintDistance", sprints.sprintDistance.roundToInt())
+                put("longestSprint", sprints.longestSprint.roundToInt())
+                put("highIntensityDistance", sprints.highIntensityDistance.roundToInt())
+                // Seconds and metres in the walk, jog, run and sprint bands
+                put("speedBands", JSONArray(sprints.bandMs.map { (it / 1000.0).roundToLong() }))
+                put("speedBandDistance", JSONArray(sprints.bandDistance.map { it.roundToInt() }))
+            } else {
+                val splits = splits(track)
+                if (splits.length() > 0) put("splits", splits)
+            }
         }
 
         val workout = HealthHistory.Workout(
@@ -331,4 +379,13 @@ class WorkoutRecorder(
     }
 
     private fun round2(v: Double) = (v * 100).roundToLong() / 100.0
+
+    /** Great-circle distance, fine for the few metres between two fixes. */
+    private fun metersBetween(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val r = 6_371_000.0
+        val dLat = Math.toRadians(lat2 - lat1)
+        val dLon = Math.toRadians(lon2 - lon1)
+        val a = sin(dLat / 2).pow(2) + cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) * sin(dLon / 2).pow(2)
+        return 2 * r * asin(sqrt(a))
+    }
 }

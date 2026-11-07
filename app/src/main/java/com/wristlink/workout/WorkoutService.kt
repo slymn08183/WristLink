@@ -68,6 +68,8 @@ class WorkoutService : Service() {
 
     companion object {
         private const val TAG = "WorkoutService"
+        /** Which WorkoutType was started last, to tell football from a run when recovering. */
+        private const val PREFS_SERVICE = "workout_service"
         const val CHANNEL_ID = "workout"
         private const val NOTIFICATION_ID = 4210
 
@@ -279,6 +281,7 @@ class WorkoutService : Service() {
         WorkoutState.setFinished(null)
         try {
             client.startExerciseAsync(config).await()
+            getSharedPreferences(PREFS_SERVICE, MODE_PRIVATE).edit().putString("type", type.key).apply()
             Log.i(TAG, "Started ${type.key}: ${types.map { it.name }} autoPause=$auto")
             postNotification()
         } catch (e: Exception) {
@@ -411,7 +414,11 @@ class WorkoutService : Service() {
         if (recorder == null && recovering && !state.isEnded) {
             recovering = false
             val config = update.exerciseConfig
-            type = config?.exerciseType?.let { WorkoutType.fromExerciseType(it) } ?: WorkoutType.OTHER
+            // Football records as a run, so the type started last decides between the two
+            val started = WorkoutType.fromKey(getSharedPreferences(PREFS_SERVICE, MODE_PRIVATE).getString("type", null))
+            type = config?.exerciseType?.let { et ->
+                started.takeIf { it.exerciseType == et } ?: WorkoutType.fromExerciseType(et)
+            } ?: WorkoutType.OTHER
             val start = update.startTime?.toEpochMilli() ?: now
             val maxHr = HealthProfile.current(this).maxHr
             recorder = WorkoutRecorder(type, start, maxHr)
@@ -499,7 +506,11 @@ class WorkoutService : Service() {
                 speed = if (phase == WorkoutState.Phase.PAUSED) null else speed ?: it.speed,
                 cadence = cadence ?: it.cadence,
                 elevationGain = r.elevationGainTotal ?: it.elevationGain,
-                zoneMs = r.zoneMs.toList()
+                zoneMs = r.zoneMs.toList(),
+                sprints = r.sprints.sprints,
+                maxSpeed = r.sprints.maxSpeed,
+                highIntensityDistance = r.sprints.highIntensityDistance,
+                speedBandMs = r.sprints.bandMs.toList()
             )
         }
         if (phase != before.phase || autoPaused != before.autoPaused) {
@@ -511,7 +522,8 @@ class WorkoutService : Service() {
         val km = (r.distance / 1000).toInt()
         if (km > lastKm) {
             lastKm = km
-            if (type.hasDistance) buzz(longArrayOf(0, 150, 100, 150))
+            // Mid-match a buzz every kilometre is just a distraction
+            if (type.hasDistance && type != WorkoutType.FOOTBALL) buzz(longArrayOf(0, 150, 100, 150))
         }
 
         lastState = state

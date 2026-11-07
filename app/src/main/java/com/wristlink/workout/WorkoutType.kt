@@ -23,6 +23,12 @@ enum class WorkoutType(
     RUN("run", "Run", ExerciseType.RUNNING, outdoor = true, Effort.PACE, hasDistance = true, autoPauseByDefault = true),
     WALK("walk", "Walk", ExerciseType.WALKING, outdoor = true, Effort.PACE, hasDistance = true, autoPauseByDefault = false),
     HIKE("hike", "Hike", ExerciseType.HIKING, outdoor = true, Effort.PACE, hasDistance = true, autoPauseByDefault = false),
+    /**
+     * Sprints, top speed and distance from GPS; no auto-pause, standing is part of the game.
+     * Recorded as a run: Health Services gives SOCCER only heart rate and calories (no GPS,
+     * speed or distance) on Galaxy watches. It's football again in Apple Health (soccer).
+     */
+    FOOTBALL("football", "Football", ExerciseType.RUNNING, outdoor = true, Effort.SPEED, hasDistance = true, autoPauseByDefault = false),
     BIKE("bike", "Outdoor bike", ExerciseType.BIKING, outdoor = true, Effort.SPEED, hasDistance = true, autoPauseByDefault = true),
     BIKE_INDOOR("bike_indoor", "Indoor bike", ExerciseType.BIKING_STATIONARY, outdoor = false, Effort.NONE, hasDistance = false, autoPauseByDefault = false),
     TREADMILL("treadmill", "Treadmill", ExerciseType.RUNNING_TREADMILL, outdoor = false, Effort.PACE, hasDistance = true, autoPauseByDefault = false),

@@ -252,6 +252,9 @@ struct WorkoutDetailView: View {
         ScrollView {
             VStack(spacing: 16) {
                 summaryCard
+                if let football = record.summary, let sprints = football.sprints {
+                    footballCard(football, sprints: sprints)
+                }
                 if let analysis {
                     if analysis.coordinates.count >= 2 {
                         RouteMap(coordinates: analysis.coordinates)
@@ -298,6 +301,49 @@ struct WorkoutDetailView: View {
             analysis = WorkoutAnalysis(record: full, maxHeartRate: maxHeartRate)
             loaded = true
         }
+    }
+
+    /// Sprints, top speed and how the time split between walking, jogging, running and sprinting.
+    private func footballCard(_ s: WorkoutRecord.Summary, sprints: Int) -> some View {
+        let labels = ["Walk", "Jog", "Run", "Sprint"]
+        let colors: [Color] = [.gray, .cyan, .green, .orange]
+        let seconds = s.speedBands ?? []
+        let meters = s.speedBandDistance ?? []
+        let total = max(1, seconds.reduce(0, +))
+        return VStack(alignment: .leading, spacing: 14) {
+            Label("Match", systemImage: "figure.soccer")
+                .font(.subheadline.weight(.semibold))
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
+                Metric(value: "\(sprints)", label: "sprints")
+                Metric(value: s.maxSpeed.map { String(format: "%.1f", $0 * 3.6) } ?? "–", label: "top km/h")
+                Metric(value: s.longestSprint.map { Format.distance($0) } ?? "–", label: "longest sprint")
+                Metric(value: s.sprintDistance.map { Format.distance($0) } ?? "–", label: "sprinting")
+                Metric(value: s.highIntensityDistance.map { Format.distance($0) } ?? "–", label: "over 15 km/h")
+                Metric(value: record.distance.map { Format.distance($0) } ?? "–", label: "total")
+            }
+            if !seconds.isEmpty {
+                VStack(spacing: 6) {
+                    ForEach(0..<min(labels.count, seconds.count), id: \.self) { i in
+                        HStack(spacing: 8) {
+                            Text(labels[i]).font(.caption).foregroundStyle(.secondary).frame(width: 46, alignment: .leading)
+                            GeometryReader { geo in
+                                Capsule().fill(Color.secondary.opacity(0.15))
+                                    .overlay(alignment: .leading) {
+                                        Capsule().fill(colors[i]).frame(width: geo.size.width * seconds[i] / total)
+                                    }
+                            }
+                            .frame(height: 8)
+                            Text(Format.elapsed(seconds[i])).font(.caption.monospacedDigit()).frame(width: 52, alignment: .trailing)
+                            Text(i < meters.count ? Format.distance(meters[i]) : "").font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary).frame(width: 60, alignment: .trailing)
+                        }
+                    }
+                }
+            }
+            Text("A sprint is a second or more at 20 km/h and up.")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+        .card()
     }
 
     private var summaryCard: some View {

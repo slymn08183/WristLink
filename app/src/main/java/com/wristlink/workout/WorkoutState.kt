@@ -66,6 +66,12 @@ object WorkoutState {
         val maxHr: Int = 190,
         /** Milliseconds spent in zones 1..5. */
         val zoneMs: List<Long> = List(HrZones.COUNT) { 0L },
+        /** Football: sprints so far, top speed (m/s), distance at 15 km/h or faster. */
+        val sprints: Int = 0,
+        val maxSpeed: Double = 0.0,
+        val highIntensityDistance: Double = 0.0,
+        /** Milliseconds walking, jogging, running and sprinting (SprintTracker's bands). */
+        val speedBandMs: List<Long> = List(4) { 0L },
         val laps: List<Lap> = emptyList(),
         /** Start and distance of the lap in progress. */
         val lapStart: Long = 0,
