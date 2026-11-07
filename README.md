@@ -28,7 +28,10 @@ workflow. WristLink adds over 40 commits on top, about 11,400 lines in the watch
   activity rings, resting heart rate against the normal range for age and sex, a sleep score,
   coaching alerts, tiles and complications.
 - **Workouts:** Health Services exercise sessions with live screens, heart-rate zones, laps and a
-  summary, recorded with their GPS route.
+  summary, recorded with their GPS route. Football counts sprints (a second or more at 20 km/h),
+  top speed, distance over 15 km/h and time walking, jogging, running and sprinting, from GPS
+  speed with spikes filtered out (Health Services gives football no GPS on Galaxy watches, so it
+  records as a run underneath and goes to Apple Health as soccer).
 - **Apple Health sync** of samples, sleep and workouts with routes, deduplicated with HealthKit
   sync identifiers, and an iPhone dashboard with day, week and month charts (Swift Charts) that
   keeps history beyond the watch's 90 days.
@@ -64,6 +67,7 @@ workflow. WristLink adds over 40 commits on top, about 11,400 lines in the watch
 | Two WristLink watch faces with the weather built in (see below) | Weather: yes |
 | Health on the watch: activity rings, heart rate, sleep score, tiles and complications ([below](#health)) | No |
 | Workouts on the watch: run, walk, hike, bike, rowing and more, with heart-rate zones and laps | No |
+| Football: sprints, top speed and time in each speed band, live and afterwards | No (details on the iPhone: yes) |
 | Apple Health sync: steps, heart rate, sleep, workouts with their GPS route | Yes |
 | Health dashboard on the iPhone with day, week and month charts and months of history | Yes |
 
@@ -96,7 +100,8 @@ shares (Health Services), and works it out the way Samsung Health does:
 - **Heart rate:** live, the day's range, and resting heart rate against the normal range for
   your age and sex.
 - **Sleep:** time asleep, awake stretches and a 0–100 score, from the watch's own sleep detection.
-- **Workouts:** live screens, heart-rate zones, laps, and a summary afterwards.
+- **Workouts:** live screens, heart-rate zones, laps, and a summary afterwards. Football adds a
+  page with sprints, top speed and walking/jogging/running/sprinting time.
 - **Coaching:** a nudge after 50 minutes sitting, alerts for a heart rate that stays too high or
   too low at rest, step goal reminders and badges.
 - **Tiles and complications** for activity, heart rate and sleep, on any watch face.
@@ -160,10 +165,18 @@ counter every 10 minutes at night). Weather tiles and complications get a whole 
 and sunrise/sunset at once and don't wake the watch to update. On a Galaxy Watch most overnight drain comes from Samsung
 Health's sleep measurements (blood oxygen especially), Bluetooth and the screen.
 
+Measured on a Watch4 Classic: any app with a passive heart-rate subscription in Health Services
+keeps the sensor measuring about once a second, whatever Samsung Health is set to (even with it
+disabled). WristLink subscribes for live heart rate, alerts and history; the watch keeps every
+reading, but Apple Health gets one a minute plus sudden changes, so the iPhone link doesn't
+carry ~60,000 readings a day. Uninstalled apps' subscriptions can linger in Health Services
+until the watch restarts.
+
 ## Roadmap
 
-- **Don't buzz while the iPhone is in use**, like an Apple Watch: an experiment reads whether the
-  iPhone's screen is on from its Bluetooth advertisements; nothing is held back yet.
+- **Don't buzz while the iPhone is in use**, like an Apple Watch: an experiment that read the
+  iPhone's screen state from its Bluetooth advertisements is in the code but off, since its
+  constant scan cost 8% of a day's battery before any state was mapped.
 - **iPhone app:** ring phone / ring watch, camera preview.
 
 ## Project layout
