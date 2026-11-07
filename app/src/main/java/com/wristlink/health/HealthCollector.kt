@@ -41,12 +41,17 @@ object HealthCollector {
     /** The last heart rate queued for Apple Health; in memory, a restart just queues the next one. */
     @Volatile private var lastQueuedHr: Pair<Long, Double>? = null
 
+    /**
+     * No heart rate: on Galaxy watches a passive heart-rate subscription keeps the sensor
+     * measuring every second, whatever Samsung Health is set to (measured 2026-11-07: ~1
+     * reading a second with Samsung Health on "every 10 minutes", and with it disabled). That
+     * was the biggest drain on the watch. [HeartRateSampler] measures every 10 minutes instead.
+     */
     private val wanted = setOf(
         DataType.STEPS_DAILY,
         DataType.DISTANCE_DAILY,
         DataType.CALORIES_DAILY,
-        DataType.FLOORS_DAILY,
-        DataType.HEART_RATE_BPM
+        DataType.FLOORS_DAILY
     )
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -145,14 +150,28 @@ object HealthCollector {
             if (active > 0.5 && !workingOut) store.add(HealthStore.ACTIVE_CALORIES, from, to, active)
         }
 
+        // Not subscribed any more, but a subscription from an older version may still deliver
         val heartRates = points.getData(DataType.HEART_RATE_BPM)
             .filter { it.value > 0 }
             .map { it.getTimeInstant(boot).toEpochMilli() to it.value }
             .sortedBy { it.first }
-        for ((t, bpm) in heartRates) {
-            // The watch's own history keeps every reading. Apple Health gets one a minute, plus
-            // any sudden change: with the sensor measuring continuously that's ~60k readings a
-            // day otherwise, all of them sent over Bluetooth and written on the iPhone.
+        recordHeartRates(context, heartRates, newData = false)
+        Log.i(TAG, "Delivery: ${heartRates.size} heart rates, steps +${steps.sumOf { it.third }.toInt()}")
+        if (steps.isNotEmpty()) LiveHealth.onActivity(context, lastMove = steps.last().second)
+
+        rollDay(context)
+        HealthAlerts.onNewData(context)
+    }
+
+    /**
+     * Heart-rate readings, oldest first, from [HeartRateSampler] (or a passive delivery). The
+     * watch's own history keeps every one; Apple Health gets one a minute plus sudden changes.
+     */
+    fun recordHeartRates(context: Context, readings: List<Pair<Long, Double>>, newData: Boolean = true) {
+        if (readings.isEmpty()) return
+        val store = HealthStore.get(context)
+        val history = HealthHistory.get(context)
+        for ((t, bpm) in readings) {
             val last = lastQueuedHr
             if (last == null || t - last.first >= HR_QUEUE_INTERVAL_MS || abs(bpm - last.second) >= HR_QUEUE_JUMP_BPM) {
                 store.add(HealthStore.HEART_RATE, t, t, bpm)
@@ -160,11 +179,8 @@ object HealthCollector {
             }
             history.addHeartRate(t, bpm)
         }
-        heartRates.lastOrNull()?.let { (t, bpm) -> LiveHealth.onHeartRate(context, t, bpm) }
-        if (steps.isNotEmpty()) LiveHealth.onActivity(context, lastMove = steps.last().second)
-
-        rollDay(context)
-        HealthAlerts.onNewData(context)
+        readings.last().let { (t, bpm) -> LiveHealth.onHeartRate(context, t, bpm) }
+        if (newData) HealthAlerts.onNewData(context)
     }
 
     /** One stretch of a daily total: from, to, amount added. */

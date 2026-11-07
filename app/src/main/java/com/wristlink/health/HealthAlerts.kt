@@ -56,14 +56,21 @@ object HealthAlerts {
 
     // ---- Heart rate ----
 
+    /** Whether a reading would count towards a heart-rate alert, so the next comes sooner. */
+    fun outsideAlertRange(context: Context, bpm: Double): Boolean {
+        val profile = HealthProfile.current(context)
+        return profile.hrAlerts && !workoutActive() && (bpm > profile.hrHigh || bpm < profile.hrLow)
+    }
+
     private fun checkHeartRate(context: Context, profile: HealthProfile.Profile) {
         val now = System.currentTimeMillis()
         val prefs = prefs(context)
         if (now - prefs.getLong("hr.last", 0) < HR_ALERT_COOLDOWN_MS) return
         val minutes = HealthHistory.get(context).minutes(now - HR_WINDOW_MS, now)
         val withHr = minutes.filter { it.hrAvg != null }
-        // Needs a reading most minutes, and no walking in between
-        if (withHr.size < 8 || minutes.sumOf { it.steps } > 20) return
+        // Three measurements in the window (HeartRateSampler measures every 3 minutes once one
+        // is out of range), all out of range, and no walking in between
+        if (withHr.size < 3 || minutes.sumOf { it.steps } > 20) return
         val high = withHr.all { it.hrAvg!! > profile.hrHigh }
         val low = withHr.all { it.hrAvg!! < profile.hrLow }
         if (!high && !low) return

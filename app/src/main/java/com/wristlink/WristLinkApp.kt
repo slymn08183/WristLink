@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import com.wristlink.notification.NotificationChannels
 import com.wristlink.health.HealthCollector
+import com.wristlink.health.HeartRateSampler
 import com.wristlink.health.HealthAlerts
 import com.wristlink.service.WristLinkService
 import com.wristlink.settings.SettingsManager
@@ -35,6 +36,7 @@ class WristLinkApp : Application() {
         // No move reminders or resting heart-rate alerts mid-workout
         HealthAlerts.workoutActive = { WorkoutState.active.value }
         HealthCollector.register(this)
+        HeartRateSampler.schedule(this, delayMs = 60_000)
         SleepGuard.start(this)
     }
 

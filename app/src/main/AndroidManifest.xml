@@ -188,6 +188,11 @@
             </intent-filter>
         </receiver>
 
+        <!-- Heart rate every 10 minutes (HeartRateSampler), from its own alarm -->
+        <receiver
+            android:name=".health.HeartRateSampler$Receiver"
+            android:exported="false" />
+
         <receiver
             android:name=".update.UpdateInstallReceiver"
             android:exported="false" />
