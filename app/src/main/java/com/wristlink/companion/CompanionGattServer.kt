@@ -342,8 +342,14 @@ class CompanionGattServer(private val context: Context) {
             }
             "nextWorkout" -> {
                 val workout = HealthHistory.get(context).nextUnsyncedWorkout()
-                sendMessage(device, workout?.let { WorkoutSync.message(context, it) } ?: WorkoutSync.none())
-                Log.i(TAG, "Sent workout ${workout?.id ?: "none"}")
+                val message = workout?.let { WorkoutSync.message(context, it) } ?: WorkoutSync.none()
+                sendMessage(device, message)
+                val text = message.toString()
+                Log.i(TAG, "Sent workout ${workout?.id ?: "none"} (${text.length} bytes)")
+                // The last one sent, readable over adb, for when the iPhone can't read it
+                if (workout != null) runCatching {
+                    context.getExternalFilesDir(null)?.resolve("last-workout.json")?.writeText(text)
+                }
             }
             "workoutAck" -> {
                 HealthHistory.get(context).markWorkoutSynced(request.optLong("id"))

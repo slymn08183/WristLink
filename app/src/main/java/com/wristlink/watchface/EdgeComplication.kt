@@ -227,12 +227,13 @@ class EdgeComplication(
         val source = data.dataSource?.flattenToShortString() ?: return null
         val text = data.text.getTextAt(context.resources, Instant.now()).toString().trim()
         val now = System.currentTimeMillis()
-        if (text.any(Char::isDigit)) {
+        if (text.any(Char::isDigit) && !isZero(text)) {
             lastValues.edit().putString(source, text).putLong("$source@", now).apply()
             return null
         }
         if (now - lastValues.getLong("$source@", 0L) > REMEMBER_MS) return null
-        return lastValues.getString(source, null)
+        // An older version may have saved a "0"
+        return lastValues.getString(source, null)?.takeUnless { isZero(it) }
     }
 
     /** Short values only: words like "Heart rate" before a first reading are left out. */
@@ -250,7 +251,13 @@ class EdgeComplication(
                 else -> null
             }
         return value?.takeIf { it.any(Char::isDigit) && it.length <= 7 }
+            // A text source's "0" is no reading (Samsung Health's blood oxygen sends one)
+            ?.takeUnless { data is ShortTextComplicationData && isZero(it) }
     }
+
+    /** "0", "0%", "0 bpm": no heart rate or blood oxygen reads zero, so it means no reading. */
+    private fun isZero(text: String): Boolean =
+        NUMBER.find(text)?.value?.replace(",", "")?.toFloatOrNull() == 0f
 }
 
 /** Colors shared by the dashboard face and its quarters; the face updates it from the user style. */
