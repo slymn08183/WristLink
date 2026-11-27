@@ -5,6 +5,8 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,7 +36,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.rotary.RotaryScrollEvent
+import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -46,6 +52,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
+import androidx.wear.compose.foundation.lazy.ScalingLazyListState
 import androidx.wear.compose.foundation.lazy.items
 import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.wear.compose.material.Button
@@ -55,6 +62,7 @@ import androidx.wear.compose.material.Icon
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.PageIndicatorState
 import androidx.wear.compose.material.Text
+import androidx.wear.compose.material.TimeText
 import com.wristlink.R
 import com.wristlink.watchface.Ambient
 import kotlinx.coroutines.Job
@@ -134,17 +142,43 @@ fun LiveWorkoutPager(live: WorkoutState.Live, onLeave: () -> Unit) {
         }
     }
 
-    Box(Modifier.fillMaxSize()) {
+    // The bezel turns pages, one per detent. The laps list has its rotary scrolling turned off
+    // (it would take focus and swallow the bezel); here it scrolls first and turns the page at
+    // its ends.
+    val lapsListState = rememberScalingLazyListState()
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
+    val onRotary: (RotaryScrollEvent) -> Boolean = { event ->
+        val forward = event.verticalScrollPixels > 0
+        val onLaps = pages.getOrNull(pagerState.currentPage) == PAGE_LAPS
+        if (onLaps && (if (forward) lapsListState.canScrollForward else lapsListState.canScrollBackward)) {
+            scope.launch { lapsListState.scrollBy(event.verticalScrollPixels) }
+        } else if (!pagerState.isScrollInProgress) {
+            val target = (pagerState.currentPage + if (forward) 1 else -1).coerceIn(0, pages.size - 1)
+            if (target != pagerState.currentPage) scope.launch { pagerState.animateScrollToPage(target) }
+        }
+        true
+    }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .onRotaryScrollEvent(onRotary)
+            .focusRequester(focusRequester)
+            .focusable()
+    ) {
         HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { index ->
             when (pages.getOrNull(index)) {
                 PAGE_CONTROLS -> ControlsPage(live, onLap = lap, onShowMain = { scope.launch { pagerState.animateScrollToPage(pages.indexOf(PAGE_MAIN)) } })
                 PAGE_MAIN -> MainPage(live, now, onLap = lap)
                 PAGE_FOOTBALL -> FootballPage(live)
                 PAGE_ZONES -> ZonesPage(live)
-                PAGE_LAPS -> LapsPage(live, now, onLap = lap)
+                PAGE_LAPS -> LapsPage(live, now, onLap = lap, listState = lapsListState)
                 PAGE_ROUTE -> RoutePage(live)
             }
         }
+        // The clock on every page but the route, which uses the whole circle for the map
+        if (pages.getOrNull(pagerState.currentPage) != PAGE_ROUTE) TimeText()
         HorizontalPageIndicator(pageIndicatorState = pagerIndicator(pagerState))
     }
 }
@@ -345,8 +379,7 @@ private fun ZonesPage(live: WorkoutState.Live) {
 
 /** The lap in progress, a Lap button, and the laps so far (newest first). */
 @Composable
-private fun LapsPage(live: WorkoutState.Live, now: Long, onLap: () -> Unit) {
-    val listState = rememberScalingLazyListState()
+private fun LapsPage(live: WorkoutState.Live, now: Long, onLap: () -> Unit, listState: ScalingLazyListState) {
     val type = live.type ?: WorkoutType.OTHER
     // Active time of the lap in progress: the workout's active time minus the closed laps'
     val lapActive = (live.activeMs(now) - live.laps.sumOf { it.activeMs }).coerceAtLeast(0)
@@ -355,7 +388,9 @@ private fun LapsPage(live: WorkoutState.Live, now: Long, onLap: () -> Unit) {
         modifier = Modifier.fillMaxSize(),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
-        contentPadding = PaddingValues(top = 24.dp, start = 10.dp, end = 10.dp, bottom = 40.dp)
+        contentPadding = PaddingValues(top = 24.dp, start = 10.dp, end = 10.dp, bottom = 40.dp),
+        // The pager's bezel handler scrolls this list; its own would take focus from the pager
+        rotaryScrollableBehavior = null
     ) {
         item {
             Text(text = "Lap ${live.laps.size + 1}", style = MaterialTheme.typography.caption1, color = MaterialTheme.colors.primary)
