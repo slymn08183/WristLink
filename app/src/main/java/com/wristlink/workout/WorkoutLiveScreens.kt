@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -34,10 +35,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
 import androidx.wear.compose.foundation.lazy.items
@@ -50,10 +53,14 @@ import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.PageIndicatorState
 import androidx.wear.compose.material.Text
 import com.wristlink.R
+import com.wristlink.watchface.Ambient
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.DateFormat
+import java.time.Instant
+import java.time.ZoneId
+import java.time.ZonedDateTime
 import java.util.Date
 
 private const val PAGE_CONTROLS = 0
@@ -477,12 +484,13 @@ private fun ControlsPage(live: WorkoutState.Live, onLap: () -> Unit, onShowMain:
  * system wakes us that often). Updates still land whenever Health Services sends a batch.
  */
 @Composable
-fun AmbientWorkoutScreen(live: WorkoutState.Live, tick: Long) {
-    val now = if (tick > 0) maxOf(tick, System.currentTimeMillis()) else System.currentTimeMillis()
+fun AmbientWorkoutScreen(live: WorkoutState.Live, tick: Long, burnInProtection: Boolean) {
+    val now = ambientNow(tick)
     val type = live.type ?: WorkoutType.OTHER
     val grey = Color(0xFFB0B0B0)
+    val shift = burnInShift(burnInProtection, now)
     Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
+        modifier = Modifier.fillMaxSize().offset(shift.x, shift.y).padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
@@ -502,4 +510,53 @@ fun AmbientWorkoutScreen(live: WorkoutState.Live, tick: Long) {
         }
         Text(text = "${WorkoutFormat.bpm(live.hr)} bpm", style = MaterialTheme.typography.title3, color = grey)
     }
+}
+
+/**
+ * Ambient with no workout running (type picker, warm-up, summary): just the time and what
+ * the screen is, dim on black, so Always On doesn't keep a colorful screen lit.
+ */
+@Composable
+fun AmbientIdleScreen(live: WorkoutState.Live, tick: Long, burnInProtection: Boolean) {
+    val now = ambientNow(tick)
+    val grey = Color(0xFF8A8A8A)
+    val shift = burnInShift(burnInProtection, now)
+    Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+        Column(
+            modifier = Modifier.offset(shift.x, shift.y).padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(now)),
+                style = MaterialTheme.typography.title2,
+                color = grey
+            )
+            Text(
+                text = if (live.phase == WorkoutState.Phase.PREPARING) {
+                    "${live.type?.label ?: "Workout"} · warming up"
+                } else {
+                    "Workout"
+                },
+                style = MaterialTheme.typography.caption2,
+                color = grey,
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+/** The ambient update time, or now when that's later (a data batch woke us in between). */
+private fun ambientNow(tick: Long): Long =
+    if (tick > 0) maxOf(tick, System.currentTimeMillis()) else System.currentTimeMillis()
+
+/**
+ * The watch faces' burn-in shift ([Ambient.offset], a few pixels every minute), scaled from
+ * face units to this screen. Zero when the display doesn't need burn-in protection.
+ */
+@Composable
+private fun burnInShift(enabled: Boolean, now: Long): DpOffset {
+    if (!enabled) return DpOffset.Zero
+    val unit = LocalConfiguration.current.screenWidthDp / 450f
+    val (dx, dy) = Ambient.offset(ZonedDateTime.ofInstant(Instant.ofEpochMilli(now), ZoneId.systemDefault()))
+    return DpOffset((dx * unit).dp, (dy * unit).dp)
 }
