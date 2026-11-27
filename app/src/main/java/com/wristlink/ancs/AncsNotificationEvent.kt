@@ -18,8 +18,16 @@ data class AncsNotificationEvent(
     val eventFlags: Byte,
     val categoryId: Byte,
     val categoryCount: Byte,
-    val notificationUid: UInt
+    val notificationUid: UInt,
+    /** For [isSessionStart] markers: the new session's number. */
+    val session: Int = 0
 ) {
+    /**
+     * Not from iOS: put into the event stream by AncsSessionManager when ANCS is subscribed
+     * again. UIDs before it belong to an earlier session and may be reused after it.
+     */
+    val isSessionStart: Boolean get() = eventId == AncsConstants.EVENT_ID_SESSION_START
+
     val isAdded: Boolean get() = eventId == AncsConstants.EVENT_ID_ADDED
     val isModified: Boolean get() = eventId == AncsConstants.EVENT_ID_MODIFIED
     val isRemoved: Boolean get() = eventId == AncsConstants.EVENT_ID_REMOVED
@@ -45,6 +53,15 @@ data class AncsNotificationEvent(
 
     companion object {
         const val EVENT_SIZE = 8
+
+        fun sessionStart(session: Int) = AncsNotificationEvent(
+            eventId = AncsConstants.EVENT_ID_SESSION_START,
+            eventFlags = 0,
+            categoryId = 0,
+            categoryCount = 0,
+            notificationUid = 0u,
+            session = session
+        )
 
         fun parse(data: ByteArray): AncsNotificationEvent? {
             if (data.size < EVENT_SIZE) return null

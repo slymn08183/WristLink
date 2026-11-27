@@ -66,6 +66,26 @@ class AncsSessionManager {
     }
 
     /**
+     * Seconds since the epoch at first, so numbers from before a restart (still on notifications
+     * the watch shows) are never handed out again; one up per ANCS subscription.
+     */
+    private var session = (System.currentTimeMillis() / 1000).toInt()
+
+    /**
+     * ANCS is about to be subscribed (again): iOS numbers notifications anew per session, so
+     * UIDs seen so far mean nothing from here on. Called before the subscription, so the marker
+     * comes before every event of the new session in [events].
+     */
+    fun startNewSession() {
+        synchronized(lock) {
+            session++
+            activeUids.clear()
+            attributeParser.reset()
+            _events.tryEmit(AncsNotificationEvent.sessionStart(session))
+        }
+    }
+
+    /**
      * Process a Data Source fragment. Returns parsed result if complete.
      */
     fun processDataSourceFragment(data: ByteArray): Any? =

@@ -78,6 +78,8 @@ class BleConnectionManager(
 
     private var onNotificationSource: ((ByteArray) -> Unit)? = null
     private var onDataSource: ((ByteArray) -> Unit)? = null
+    /** Right before ANCS is subscribed: a new notification session (UIDs start over). */
+    private var onAncsSubscribing: (() -> Unit)? = null
 
     // Apple Media Service (optional — media controls only)
     private var amsRemoteCommandChar: BluetoothGattCharacteristic? = null
@@ -348,6 +350,7 @@ class BleConnectionManager(
     private fun setupAndSubscribe() {
         _connectionState.value = ConnectionState.SUBSCRIBING
         Log.i(TAG, "=== SETTING UP ANCS SUBSCRIPTIONS ===")
+        onAncsSubscribing?.invoke()
 
         // Set up notification callbacks
         notificationSourceChar?.let { char ->
@@ -591,10 +594,12 @@ class BleConnectionManager(
 
     fun setAncsCallbacks(
         onNotificationSource: (ByteArray) -> Unit,
-        onDataSource: (ByteArray) -> Unit
+        onDataSource: (ByteArray) -> Unit,
+        onSubscribing: () -> Unit = {}
     ) {
         this.onNotificationSource = onNotificationSource
         this.onDataSource = onDataSource
+        this.onAncsSubscribing = onSubscribing
     }
 
     fun setAmsCallbacks(

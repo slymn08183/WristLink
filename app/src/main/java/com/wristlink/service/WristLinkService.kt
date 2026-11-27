@@ -184,7 +184,8 @@ class WristLinkService : Service() {
                 if (result != null) {
                     pipe.handleDataSourceResponse(result)
                 }
-            }
+            },
+            onSubscribing = { sessMgr.startNewSession() }
         )
 
         sm.onDisconnected = {
@@ -376,6 +377,8 @@ class WristLinkService : Service() {
         phoneActivityMonitor?.stop()
         phoneActivityMonitor = null
         stateMachine?.disconnect()
+        stateMachine?.stop()
+        pipeline?.stop()
         bondManager?.unregister()
 
         try {
