@@ -118,6 +118,7 @@ fun SleepScreen() {
                         val within = nights.count { !it.ongoing && abs(it.asleepMs - goal) <= 60 * 60_000L }
                         Caption("This week · goal ${formatDuration(goal)}")
                         WeekBars(nights.filter { !it.ongoing }, goal, Modifier.fillMaxWidth().height(50.dp))
+                        WeekdayLetters(Modifier.fillMaxWidth())
                         Caption("$within of ${nights.size} nights within an hour of your goal")
                     }
                 }
@@ -134,6 +135,18 @@ fun SleepScreen() {
                         Caption(animal.description)
                     }
                 }
+            }
+        }
+    }
+}
+
+/** A weekday letter under each of [WeekBars]' slots, like the Today screen's week row. */
+@Composable
+private fun WeekdayLetters(modifier: Modifier) {
+    Row(modifier) {
+        lastDays(7).forEach { day ->
+            Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                Caption(weekdayLetter(day), maxLines = 1)
             }
         }
     }
@@ -159,14 +172,19 @@ private fun MovementChart(night: HealthMetrics.Night, modifier: Modifier) {
     }
 }
 
-/** Asleep time per night with the goal as a dashed line. */
+/**
+ * Asleep time per night with the goal as a dashed line. One slot per morning of the last 7
+ * days, so a night without sleep leaves a gap instead of shifting the others.
+ */
 @Composable
 private fun WeekBars(nights: List<HealthMetrics.Night>, goal: Long, modifier: Modifier) {
+    val days = lastDays(7)
     Canvas(modifier) {
         val max = maxOf(nights.maxOfOrNull { it.asleepMs } ?: 0L, goal + 3_600_000L).toFloat()
-        val slot = size.width / 7
+        val slot = size.width / days.size
         val width = slot * 0.55f
-        nights.takeLast(7).forEachIndexed { i, n ->
+        days.forEachIndexed { i, day ->
+            val n = nights.lastOrNull { it.day == day } ?: return@forEachIndexed
             val h = n.asleepMs / max * size.height
             drawRoundRect(SleepColor, Offset(i * slot + (slot - width) / 2, size.height - h), Size(width, h), CornerRadius(width / 3))
         }
