@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
@@ -37,9 +38,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
@@ -170,6 +173,10 @@ private fun PhaseLabel(live: WorkoutState.Live) {
 private fun MainPage(live: WorkoutState.Live, now: Long, onLap: () -> Unit) {
     val type = live.type ?: WorkoutType.OTHER
     val zone = live.hr?.let { HrZones.zoneOf(it, live.maxHr) } ?: 0
+    // At large font sizes a step down per row keeps the stack inside the circle (the text
+    // still ends up bigger than at the default size)
+    val large = isLargeFont()
+    val typography = MaterialTheme.typography
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -179,7 +186,7 @@ private fun MainPage(live: WorkoutState.Live, now: Long, onLap: () -> Unit) {
                 onClick = {},
                 onLongClick = onLap
             )
-            .padding(horizontal = 20.dp, vertical = 22.dp),
+            .padding(horizontal = 24.dp, vertical = 26.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
@@ -192,24 +199,30 @@ private fun MainPage(live: WorkoutState.Live, now: Long, onLap: () -> Unit) {
         }
         Text(
             text = WorkoutFormat.duration(live.activeMs(now)),
-            style = MaterialTheme.typography.display2,
-            color = if (live.phase == WorkoutState.Phase.PAUSED) PausedColor else MaterialTheme.colors.onBackground
+            style = if (large) typography.display3 else typography.display2,
+            color = if (live.phase == WorkoutState.Phase.PAUSED) PausedColor else MaterialTheme.colors.onBackground,
+            maxLines = 1
         )
         if (type.hasDistance || live.distance > 0) {
             Row(verticalAlignment = Alignment.Bottom) {
-                Text(text = WorkoutFormat.km(live.distance), style = MaterialTheme.typography.title1, color = MaterialTheme.colors.onBackground)
+                Text(text = WorkoutFormat.km(live.distance), style = if (large) typography.title2 else typography.title1, color = MaterialTheme.colors.onBackground, maxLines = 1)
                 Text(text = " km", style = MaterialTheme.typography.caption2, color = MaterialTheme.colors.onSurfaceVariant, modifier = Modifier.padding(bottom = 3.dp))
             }
         }
         when {
-            type == WorkoutType.FOOTBALL ->
-                MetricLine("${live.sprints}", "sprints · top ${WorkoutFormat.speedKmh(live.maxSpeed.takeIf { it > 0 })} km/h")
-            type.effort == WorkoutType.Effort.PACE -> MetricLine(WorkoutFormat.pace(WorkoutFormat.paceOf(live.speed)), "/km")
-            type.effort == WorkoutType.Effort.SPEED -> MetricLine(WorkoutFormat.speedKmh(live.speed), "km/h")
-            live.steps > 0 -> MetricLine(live.steps.toString(), "steps")
+            // The sprint count has its own page; at large sizes the line would only wrap
+            type == WorkoutType.FOOTBALL -> if (large) {
+                MetricLine("${live.sprints}", "sprints", large)
+            } else {
+                MetricLine("${live.sprints}", "sprints · top ${WorkoutFormat.speedKmh(live.maxSpeed.takeIf { it > 0 })} km/h", large)
+            }
+            type.effort == WorkoutType.Effort.PACE -> MetricLine(WorkoutFormat.pace(WorkoutFormat.paceOf(live.speed)), "/km", large)
+            type.effort == WorkoutType.Effort.SPEED -> MetricLine(WorkoutFormat.speedKmh(live.speed), "km/h", large)
+            live.steps > 0 -> MetricLine(live.steps.toString(), "steps", large)
         }
         Spacer(Modifier.height(4.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
+            val numbers = if (large) typography.caption1 else typography.title3
             Icon(
                 painter = painterResource(R.drawable.ic_heart),
                 contentDescription = "Heart rate",
@@ -217,13 +230,19 @@ private fun MainPage(live: WorkoutState.Live, now: Long, onLap: () -> Unit) {
                 modifier = Modifier.size(14.dp)
             )
             Spacer(Modifier.width(3.dp))
-            Text(text = WorkoutFormat.bpm(live.hr), style = MaterialTheme.typography.title3, color = MaterialTheme.colors.onBackground)
+            Text(text = WorkoutFormat.bpm(live.hr), style = numbers, color = MaterialTheme.colors.onBackground, maxLines = 1)
             Spacer(Modifier.width(12.dp))
-            Text(text = WorkoutFormat.kcal(live.calories), style = MaterialTheme.typography.title3, color = MaterialTheme.colors.onBackground)
-            Text(text = " kcal", style = MaterialTheme.typography.caption3, color = MaterialTheme.colors.onSurfaceVariant)
+            Text(text = WorkoutFormat.kcal(live.calories), style = numbers, color = MaterialTheme.colors.onBackground, maxLines = 1)
+            Text(text = " kcal", style = MaterialTheme.typography.caption3, color = MaterialTheme.colors.onSurfaceVariant, maxLines = 1)
         }
     }
 }
+
+/** Font scale past which fixed (non-scrolling) pages switch to smaller styles or drop a line. */
+private const val LARGE_FONT_SCALE = 1.15f
+
+@Composable
+internal fun isLargeFont(): Boolean = LocalDensity.current.fontScale > LARGE_FONT_SCALE
 
 /** Football: sprints, top speed, distance at high intensity, and time in each speed band. */
 @Composable
@@ -254,8 +273,10 @@ fun SpeedBands(bandMs: List<Long>, modifier: Modifier = Modifier) {
     Column(modifier) {
         SprintTracker.BAND_LABELS.forEachIndexed { i, label ->
             val ms = bandMs.getOrElse(i) { 0L }
+            // Label and time columns grow with the font (min widths keep the bars aligned at
+            // the default size); the bar takes what's left
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 1.dp)) {
-                Text(text = label, style = MaterialTheme.typography.caption3, color = MaterialTheme.colors.onSurfaceVariant, modifier = Modifier.width(40.dp))
+                Text(text = label, style = MaterialTheme.typography.caption3, color = MaterialTheme.colors.onSurfaceVariant, maxLines = 1, modifier = Modifier.widthIn(min = 40.dp).padding(end = 4.dp))
                 Box(Modifier.weight(1f).height(6.dp).background(Color(0x22FFFFFF), RoundedCornerShape(3.dp))) {
                     Box(
                         Modifier
@@ -264,7 +285,7 @@ fun SpeedBands(bandMs: List<Long>, modifier: Modifier = Modifier) {
                             .background(BandColors[i], RoundedCornerShape(3.dp))
                     )
                 }
-                Text(text = WorkoutFormat.durationCoarse(ms), style = MaterialTheme.typography.caption3, color = MaterialTheme.colors.onBackground, textAlign = TextAlign.End, modifier = Modifier.width(38.dp))
+                Text(text = compactMinutes(ms), style = MaterialTheme.typography.caption3, color = MaterialTheme.colors.onBackground, textAlign = TextAlign.End, maxLines = 1, modifier = Modifier.widthIn(min = 38.dp).padding(start = 4.dp))
             }
         }
     }
@@ -274,10 +295,10 @@ private val SprintColor = Color(0xFFFFB74D)
 private val BandColors = listOf(Color(0xFF78909C), Color(0xFF4FC3F7), Color(0xFF81C784), SprintColor)
 
 @Composable
-private fun MetricLine(value: String, unit: String) {
+private fun MetricLine(value: String, unit: String, large: Boolean = false) {
     Row(verticalAlignment = Alignment.Bottom) {
-        Text(text = value, style = MaterialTheme.typography.title2, color = MaterialTheme.colors.onBackground)
-        Text(text = " $unit", style = MaterialTheme.typography.caption2, color = MaterialTheme.colors.onSurfaceVariant, modifier = Modifier.padding(bottom = 2.dp))
+        Text(text = value, style = if (large) MaterialTheme.typography.title3 else MaterialTheme.typography.title2, color = MaterialTheme.colors.onBackground, maxLines = 1)
+        Text(text = " $unit", style = MaterialTheme.typography.caption2, color = MaterialTheme.colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(bottom = 2.dp))
     }
 }
 
@@ -285,29 +306,38 @@ private fun MetricLine(value: String, unit: String) {
 @Composable
 private fun ZonesPage(live: WorkoutState.Live) {
     val zone = live.hr?.let { HrZones.zoneOf(it, live.maxHr) } ?: 0
+    // The top and bottom bars sit where the circle is narrowest; at large font sizes the
+    // stack is taller, so narrow it further and drop the zone line (the colour still tells it,
+    // and the highlighted bar)
+    val large = isLargeFont()
     Column(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 30.dp, vertical = 26.dp),
+        modifier = Modifier.fillMaxSize().padding(horizontal = if (large) 36.dp else 30.dp, vertical = 26.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
         Row(verticalAlignment = Alignment.Bottom) {
             Text(
                 text = WorkoutFormat.bpm(live.hr),
-                style = MaterialTheme.typography.title1,
-                color = if (zone > 0) HrZones.colors[zone - 1] else MaterialTheme.colors.onBackground
+                style = if (large) MaterialTheme.typography.title2 else MaterialTheme.typography.title1,
+                color = if (zone > 0) HrZones.colors[zone - 1] else MaterialTheme.colors.onBackground,
+                maxLines = 1
             )
-            Text(text = " bpm", style = MaterialTheme.typography.caption2, color = MaterialTheme.colors.onSurfaceVariant, modifier = Modifier.padding(bottom = 3.dp))
+            Text(text = " bpm", style = MaterialTheme.typography.caption2, color = MaterialTheme.colors.onSurfaceVariant, maxLines = 1, modifier = Modifier.padding(bottom = 3.dp))
         }
-        Text(
-            text = when {
-                live.heartRate == WorkoutState.Signal.OFF_BODY -> "Not on wrist"
-                zone > 0 -> "Zone $zone · ${HrZones.labels[zone - 1]}"
-                live.hr != null -> "Below zone 1"
-                else -> "Reading heart rate…"
-            },
-            style = MaterialTheme.typography.caption2,
-            color = MaterialTheme.colors.onSurfaceVariant
-        )
+        if (!large || live.heartRate == WorkoutState.Signal.OFF_BODY) {
+            Text(
+                text = when {
+                    live.heartRate == WorkoutState.Signal.OFF_BODY -> "Not on wrist"
+                    zone > 0 -> "Zone $zone · ${HrZones.labels[zone - 1]}"
+                    live.hr != null -> "Below zone 1"
+                    else -> "Reading heart rate…"
+                },
+                style = MaterialTheme.typography.caption2,
+                color = MaterialTheme.colors.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
         Spacer(Modifier.height(6.dp))
         ZoneBars(zoneMs = live.zoneMs, maxHr = live.maxHr, current = zone.takeIf { it > 0 }, modifier = Modifier.fillMaxWidth())
     }

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -26,6 +27,7 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
@@ -66,12 +68,15 @@ fun ZoneBars(zoneMs: List<Long>, maxHr: Int, current: Int?, modifier: Modifier =
             val highlighted = current == z
             val range = HrZones.range(z, maxHr)
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                // Min widths, not fixed ones: at large font sizes the columns grow and the bar
+                // gives way, instead of the time wrapping or being cut
                 Text(
                     text = "Z$z",
                     style = MaterialTheme.typography.caption2,
                     fontWeight = if (highlighted) FontWeight.Bold else FontWeight.Normal,
                     color = if (highlighted) HrZones.colors[z - 1] else MaterialTheme.colors.onSurfaceVariant,
-                    modifier = Modifier.width(22.dp)
+                    maxLines = 1,
+                    modifier = Modifier.widthIn(min = 22.dp).padding(end = 2.dp)
                 )
                 Box(
                     Modifier
@@ -87,11 +92,12 @@ fun ZoneBars(zoneMs: List<Long>, maxHr: Int, current: Int?, modifier: Modifier =
                     )
                 }
                 Text(
-                    text = if (ms > 0) WorkoutFormat.duration(ms) else "${range.first}+",
+                    text = if (ms > 0) compactDuration(ms) else "${range.first}+",
                     style = MaterialTheme.typography.caption3,
                     color = if (highlighted) MaterialTheme.colors.onSurface else MaterialTheme.colors.onSurfaceVariant,
                     textAlign = TextAlign.End,
-                    modifier = Modifier.width(40.dp)
+                    maxLines = 1,
+                    modifier = Modifier.widthIn(min = 40.dp).padding(start = 4.dp)
                 )
             }
         }
@@ -170,17 +176,46 @@ fun WorkoutPairCard(leftLabel: String, left: String, rightLabel: String, right: 
         modifier = Modifier
             .fillMaxWidth()
             .background(SurfaceCard, RoundedCornerShape(16.dp))
-            .padding(horizontal = 14.dp, vertical = 8.dp),
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(text = leftLabel, style = MaterialTheme.typography.caption2, color = MaterialTheme.colors.onSurfaceVariant)
-            Text(text = left, style = MaterialTheme.typography.title3, color = MaterialTheme.colors.onSurface)
-        }
+        PairHalf(leftLabel, left, Modifier.weight(1f))
         Spacer(Modifier.width(6.dp))
-        Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(text = rightLabel, style = MaterialTheme.typography.caption2, color = MaterialTheme.colors.onSurfaceVariant)
-            Text(text = right, style = MaterialTheme.typography.title3, color = MaterialTheme.colors.onSurface)
-        }
+        PairHalf(rightLabel, right, Modifier.weight(1f))
     }
+}
+
+/** Values past this length ("1:02:03", "1234 kcal") get the smaller style so they stay on one line. */
+private const val LONG_PAIR_VALUE = 7
+
+@Composable
+private fun PairHalf(label: String, value: String, modifier: Modifier) {
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.caption2,
+            color = MaterialTheme.colors.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = value,
+            style = if (value.length > LONG_PAIR_VALUE) MaterialTheme.typography.caption1 else MaterialTheme.typography.title3,
+            color = MaterialTheme.colors.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+/** For narrow columns: "4:05" under an hour, "1h05" past it (the seconds stop mattering). */
+fun compactDuration(ms: Long): String {
+    val s = (ms / 1000).coerceAtLeast(0)
+    return if (s >= 3600) "%dh%02d".format(s / 3600, s % 3600 / 60) else "%d:%02d".format(s / 60, s % 60)
+}
+
+/** Whole minutes for narrow columns: "12m", "1h05". */
+fun compactMinutes(ms: Long): String {
+    val m = (ms / 60_000).coerceAtLeast(0)
+    return if (m >= 60) "%dh%02d".format(m / 60, m % 60) else "${m}m"
 }

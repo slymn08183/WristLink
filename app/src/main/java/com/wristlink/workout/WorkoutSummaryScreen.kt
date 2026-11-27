@@ -8,7 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -22,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.foundation.lazy.AutoCenteringParams
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
@@ -298,8 +299,13 @@ private fun SplitRow(s: JSONObject, type: WorkoutType) {
     val d = s.optDouble("d", 1000.0)
     val secs = s.optDouble("s", 0.0)
     val speed = if (secs > 0) d / secs else null
-    val effort = if (type.effort == WorkoutType.Effort.SPEED) "${WorkoutFormat.speedKmh(speed)} km/h"
-    else WorkoutFormat.pace(WorkoutFormat.paceOf(speed))
+    // At large font sizes the unit goes (the section is all one unit anyway) so the number fits
+    val large = isLargeFont()
+    val effort = if (type.effort == WorkoutType.Effort.SPEED) {
+        if (large) WorkoutFormat.speedKmh(speed) else "${WorkoutFormat.speedKmh(speed)} km/h"
+    } else {
+        WorkoutFormat.pace(WorkoutFormat.paceOf(speed))
+    }
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 1.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -308,13 +314,15 @@ private fun SplitRow(s: JSONObject, type: WorkoutType) {
             text = if (d >= 999) "${s.optInt("n")}" else "%.2f".format(d / 1000),
             style = MaterialTheme.typography.caption2,
             color = MaterialTheme.colors.primary,
-            modifier = Modifier.width(28.dp)
+            maxLines = 1,
+            modifier = Modifier.widthIn(min = 28.dp).padding(end = 2.dp)
         )
-        Text(text = effort, style = MaterialTheme.typography.caption1, color = MaterialTheme.colors.onSurface, modifier = Modifier.weight(1f))
+        Text(text = effort, style = MaterialTheme.typography.caption1, color = MaterialTheme.colors.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         Text(
             text = if (s.has("hr")) "${s.optInt("hr")}" else "–",
             style = MaterialTheme.typography.caption2,
             color = MaterialTheme.colors.onSurfaceVariant,
+            maxLines = 1,
             modifier = Modifier.weight(0.6f),
             textAlign = TextAlign.Center
         )
@@ -323,6 +331,8 @@ private fun SplitRow(s: JSONObject, type: WorkoutType) {
             style = MaterialTheme.typography.caption3,
             color = MaterialTheme.colors.onSurfaceVariant,
             textAlign = TextAlign.End,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(0.6f)
         )
     }
