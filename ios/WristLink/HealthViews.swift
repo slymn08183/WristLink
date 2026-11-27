@@ -106,6 +106,13 @@ struct HealthDashboard: View {
         return nil
     }
 
+    /// "Updated 2 hours ago" once the watch's numbers are over half an hour old (the watch has
+    /// been away), so they don't pass for live ones. Nil while they're fresh.
+    private var staleNote: String? {
+        guard let updated = summary.latest?.updated, Date().timeIntervalSince(updated) > 30 * 60 else { return nil }
+        return "Updated \(updated.formatted(.relative(presentation: .named)))"
+    }
+
     private var restingBand: ClosedRange<Double>? {
         if let band = summary.latest?.restingBand { return band }
         guard summary.latest?.profile != nil || settingsProfile != nil else { return nil }
@@ -115,6 +122,8 @@ struct HealthDashboard: View {
 
     var body: some View {
         let numbers = today
+        // Only the watch's numbers go stale this way; Apple Health's are read fresh
+        let stale = numbers.fromWatch ? staleNote : nil
         VStack(spacing: 16) {
             if let error = summary.lastError, !summary.loading {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
@@ -128,20 +137,22 @@ struct HealthDashboard: View {
                 TodayCard(numbers: numbers, profile: profile,
                           week: Array((summary.latest?.days ?? []).suffix(7)),
                           streak: summary.latest?.streak.map { Int($0) },
-                          collecting: collecting)
+                          collecting: collecting,
+                          staleNote: stale)
             }
             .buttonStyle(.plain)
             NavigationLink {
                 ActivityHistoryView(feed: summary, profile: profile)
             } label: {
-                HourlyStepsCard(hourly: numbers.hourlySteps, collecting: collecting)
+                HourlyStepsCard(hourly: numbers.hourlySteps, collecting: collecting, staleNote: stale)
             }
             .buttonStyle(.plain)
             NavigationLink {
                 HeartHistoryView(feed: summary, restingBand: restingBand)
             } label: {
                 HeartRateCard(hours: numbers.hourlyHeart, restingBand: restingBand,
-                              restingHr: numbers.restingHr, latest: latestReading, collecting: collecting)
+                              restingHr: numbers.restingHr, latest: latestReading, collecting: collecting,
+                              staleNote: stale)
             }
             .buttonStyle(.plain)
             sleepCard
@@ -291,12 +302,20 @@ private struct TodayCard: View {
     let week: [HealthSummary.Day]
     let streak: Int?
     let collecting: Bool
+    /// "Updated … ago" when the watch's numbers are old.
+    var staleNote: String? = nil
+
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    private var source: String? {
+        guard numbers.hasAny else { return nil }
+        if let staleNote { return staleNote }
+        return numbers.fromWatch ? "From the watch" : "From Apple Health"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            CardHeader(title: "Today", icon: "flame.fill", color: .green,
-                       detail: numbers.hasAny ? (numbers.fromWatch ? "From the watch" : "From Apple Health") : nil,
-                       chevron: true)
+            CardHeader(title: "Today", icon: "flame.fill", color: .green, detail: source, chevron: true)
             if numbers.hasAny {
                 HStack {
                     Spacer()
@@ -306,7 +325,11 @@ private struct TodayCard: View {
                             progress(numbers.activeMinutes, profile.activeMinutesGoal),
                             progress(numbers.activeCalories, profile.activeCaloriesGoal)
                         ], colors: [.green, .cyan, .pink])
-                        center
+                        // The inner ring leaves ~84 pt: accessibility text sizes don't fit, and
+                        // the steps row below has the same number
+                        if !dynamicTypeSize.isAccessibilitySize {
+                            center
+                        }
                     }
                     .frame(width: 190, height: 190)
                     Spacer()
@@ -444,10 +467,12 @@ private struct RingRow: View {
 private struct HourlyStepsCard: View {
     let hourly: [Double]
     let collecting: Bool
+    var staleNote: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            CardHeader(title: "Activity by time of day", icon: "chart.bar.fill", color: .green, chevron: true)
+            CardHeader(title: "Activity by time of day", icon: "chart.bar.fill", color: .green,
+                       detail: staleNote, chevron: true)
             if hourly.contains(where: { $0 > 0 }) {
                 Chart(ChartDay.hours(hourly)) { hour in
                     BarMark(
@@ -489,10 +514,12 @@ struct HeartRateCard: View {
     let restingHr: Double?
     let latest: Reading?
     let collecting: Bool
+    /// "Updated … ago" when the hourly ranges are the watch's old ones.
+    var staleNote: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            CardHeader(title: "Heart rate", icon: "heart.fill", color: .pink, chevron: true)
+            CardHeader(title: "Heart rate", icon: "heart.fill", color: .pink, detail: staleNote, chevron: true)
             if let latest {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text("\(Int(latest.bpm.rounded()))")
@@ -675,6 +702,19 @@ struct SleepDetailView: View {
     /// For the link to every night kept.
     var feed: SummaryFeed? = nil
 
+    /// The week and the sleep animal describe the latest nights, so they only belong with last
+    /// night, not with an older one opened from the history.
+    private var isLastNight: Bool {
+        guard let last = summary.lastNight else { return false }
+        return last.start == night.start && last.end == night.end
+    }
+
+    /// "Sleep" for last night; an older night carries its date, "Sleep · Tue 3 Nov".
+    private var title: String {
+        guard !isLastNight, let end = night.endDate else { return "Sleep" }
+        return "Sleep · \(end.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)))"
+    }
+
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
@@ -683,7 +723,9 @@ struct SleepDetailView: View {
                 movementCard
                 stagesNote
                 heartCard
-                weekCard
+                if isLastNight {
+                    weekCard
+                }
                 if let feed {
                     NavigationLink {
                         SleepHistoryView(feed: feed, profile: profile)
@@ -694,12 +736,14 @@ struct SleepDetailView: View {
                     }
                     .buttonStyle(.plain)
                 }
-                animalCard
+                if isLastNight {
+                    animalCard
+                }
             }
             .padding()
         }
         .background(Theme.background)
-        .navigationTitle("Sleep")
+        .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -847,10 +891,15 @@ struct SleepDetailView: View {
         var id: Date { date }
     }
 
+    /// Nights that ended in the last 7 days (today's morning included). The summary carries 14 to
+    /// 90 nights; plotting them all squeezed weeks into a "This week" chart.
     private var nights: [NightBar] {
         let goal = Double(profile.sleepGoalMinutes)
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let firstDay = calendar.date(byAdding: .day, value: -6, to: today) ?? today
         return (summary.sleep ?? []).compactMap { night in
-            guard let end = night.endDate, let asleep = night.asleepMin else { return nil }
+            guard let end = night.endDate, end >= firstDay, let asleep = night.asleepMin else { return nil }
             return NightBar(date: Calendar.current.startOfDay(for: end), hours: asleep / 60,
                             metGoal: asleep >= goal - 30)
         }
@@ -979,9 +1028,22 @@ struct WeeklyReport {
     let energy: HealthSummary.Energy?
     let streak: Int?
 
+    /// By date, not by position: the summary holds 14–90 entries and may be days old. Days are
+    /// the last 7 complete ones (today is still filling up and would pull the averages down);
+    /// nights are those that ended in the last 7 days, last night included.
     init(summary: HealthSummary?, workouts: [WorkoutRecord]) {
-        days = Array((summary?.days ?? []).suffix(7))
-        nights = Array((summary?.sleep ?? []).suffix(7))
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let weekBeforeToday = calendar.date(byAdding: .day, value: -7, to: today) ?? today
+        let sixDaysAgo = calendar.date(byAdding: .day, value: -6, to: today) ?? today
+        days = (summary?.days ?? []).filter { day in
+            guard let date = day.date else { return false }
+            return date >= weekBeforeToday && date < today
+        }
+        nights = (summary?.sleep ?? []).filter { night in
+            guard let end = night.endDate else { return false }
+            return end >= sixDaysAgo
+        }
         let weekAgo = Date().addingTimeInterval(-7 * 24 * 3600)
         self.workouts = workouts.filter { $0.startDate >= weekAgo }
         energy = summary?.energy

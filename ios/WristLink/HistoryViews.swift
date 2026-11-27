@@ -526,6 +526,14 @@ struct HeartHistoryView: View {
         }
     }
 
+    /// Readings alone in their stretch: a line through one point draws nothing, so these get a dot.
+    private var lonely: [Segmented] {
+        let items = segmented
+        var counts: [Int: Int] = [:]
+        for item in items { counts[item.segment, default: 0] += 1 }
+        return items.filter { counts[$0.segment] == 1 }
+    }
+
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
@@ -593,6 +601,11 @@ struct HeartHistoryView: View {
                         .interpolationMethod(.monotone)
                         .foregroundStyle(Color.pink)
                         .lineStyle(StrokeStyle(lineWidth: 1.5))
+                    }
+                    ForEach(lonely) { item in
+                        PointMark(x: .value("Time", item.point.date), y: .value("bpm", item.point.bpm))
+                            .foregroundStyle(Color.pink)
+                            .symbolSize(16)
                     }
                     if let resting = day?.restingHr {
                         RuleMark(y: .value("Resting", resting))
