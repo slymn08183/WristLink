@@ -43,6 +43,8 @@ object HealthCollector {
     private const val CLOCK_JUMP_MS = 2 * 60_000L
     /** Nobody sleeps longer in one stretch; an older "asleep" lost its wake-up. */
     private const val STALE_SLEEP_MS = 16 * 3600_000L
+    /** Register again at least this often anyway, in case Health Services dropped us. */
+    private const val REREGISTER_MS = 24 * 3600_000L
 
     private val DAILY_TYPES = listOf(HealthStore.STEPS, HealthStore.DISTANCE, HealthStore.FLOORS, HealthStore.CALORIES)
 
@@ -67,14 +69,30 @@ object HealthCollector {
     /** Called whenever the platform's sleep state changes (used by SleepGuard). */
     @Volatile var onSleepStateChanged: ((asleep: Boolean) -> Unit)? = null
 
-    fun register(context: Context) {
+    /**
+     * Register the passive listener. Runs on every process start (each alarm or passive batch
+     * starts one), so it only asks Health Services again when something could have changed: a
+     * reboot (registrations don't survive one), an app install or update, a different set of
+     * wanted types, or a day since the last time; or when [force]d. What the last registration
+     * found about sleep detection is remembered for the time between.
+     */
+    fun register(context: Context, force: Boolean = false) {
         val app = context.applicationContext
+        val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        if (_platformSleepSupported.value == null && prefs.contains("caps.sleep")) {
+            _platformSleepSupported.value = prefs.getBoolean("caps.sleep", false)
+        }
         if (!hasPermissions(app)) {
             Log.w(TAG, "Missing ACTIVITY_RECOGNITION or BODY_SENSORS, not collecting")
+            // Register afresh once they're granted again
+            prefs.edit().remove("registered.key").apply()
             return
         }
         scope.launch {
             seedToday(app)
+            val key = registrationKey(app)
+            val recent = System.currentTimeMillis() - prefs.getLong("registered.at", 0) in 0 until REREGISTER_MS
+            if (!force && recent && prefs.getString("registered.key", null) == key) return@launch
             try {
                 val client = HealthServices.getClient(app).passiveMonitoringClient
                 val caps = client.getCapabilitiesAsync().await()
@@ -91,6 +109,11 @@ object HealthCollector {
                     .setShouldUserActivityInfoBeRequested(sleep)
                     .build()
                 client.setPassiveListenerServiceAsync(PassiveHealthService::class.java, config).await()
+                prefs.edit()
+                    .putBoolean("caps.sleep", sleep)
+                    .putString("registered.key", key)
+                    .putLong("registered.at", System.currentTimeMillis())
+                    .apply()
                 Log.i(TAG, "Passive listener registered")
             } catch (e: Exception) {
                 Log.w(TAG, "Couldn't register passive monitoring", e)
@@ -113,6 +136,15 @@ object HealthCollector {
             history.addSpread(column, startOfDay(time), time, prefs.getFloat("$type.total", 0f).toDouble())
         }
         prefs.edit().putBoolean("history.seeded", true).apply()
+    }
+
+    /** Changes whenever the registration may be gone or out of date. */
+    private fun registrationKey(context: Context): String {
+        val installed = runCatching {
+            context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime
+        }.getOrDefault(0L)
+        val boot = bootId(context, bootInstant().toEpochMilli())
+        return "${wanted.map { it.name }.sorted()}|boot=$boot|installed=$installed"
     }
 
     private fun hasPermissions(context: Context) = listOf(
