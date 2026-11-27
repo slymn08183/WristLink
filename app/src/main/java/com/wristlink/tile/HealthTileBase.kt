@@ -17,6 +17,11 @@ import com.google.common.util.concurrent.ListenableFuture
 import com.wristlink.ui.HealthActivity
 import java.util.concurrent.Executors
 
+/** Font scale past which tiles drop their last row, so nothing is cut off at the bottom. */
+private const val LARGE_FONT_SCALE = 1.15f
+
+internal fun isLargeFont(device: DeviceParameters): Boolean = device.fontScale > LARGE_FONT_SCALE
+
 /**
  * Shared plumbing for the health tiles: the layout is built off the main thread (it reads the
  * history database), tapping opens the matching Health screen, and icons come from drawables.

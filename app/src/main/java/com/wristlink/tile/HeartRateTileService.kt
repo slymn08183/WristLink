@@ -50,14 +50,16 @@ class HeartRateTileService : HealthTileBase() {
             .addContent(text(ago, Typography.TYPOGRAPHY_CAPTION2, COLOR_DETAIL))
             .addContent(spacer(height = 6f))
             .addContent(bars(day))
-            .addContent(spacer(height = 4f))
-            .addContent(text(details, Typography.TYPOGRAPHY_CAPTION2, COLOR_TEXT))
-            .build()
+        // At large font sizes the range line would be cut by the bottom of the circle
+        if (!isLargeFont(device)) {
+            content.addContent(spacer(height = 4f))
+                .addContent(text(details, Typography.TYPOGRAPHY_CAPTION2, COLOR_TEXT))
+        }
 
         return PrimaryLayout.Builder(device)
             .setResponsiveContentInsetEnabled(true)
             .setPrimaryLabelTextContent(text("Heart rate", Typography.TYPOGRAPHY_CAPTION1, COLOR_HEART))
-            .setContent(content)
+            .setContent(content.build())
             .build()
     }
 
