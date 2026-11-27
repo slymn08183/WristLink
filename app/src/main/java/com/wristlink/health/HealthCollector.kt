@@ -41,6 +41,8 @@ object HealthCollector {
     private const val HR_QUEUE_INTERVAL_MS = 60_000L
     private const val HR_QUEUE_JUMP_BPM = 15.0
     private const val CLOCK_JUMP_MS = 2 * 60_000L
+    /** Nobody sleeps longer in one stretch; an older "asleep" lost its wake-up. */
+    private const val STALE_SLEEP_MS = 16 * 3600_000L
 
     private val DAILY_TYPES = listOf(HealthStore.STEPS, HealthStore.DISTANCE, HealthStore.FLOORS, HealthStore.CALORIES)
 
@@ -139,6 +141,7 @@ object HealthCollector {
         // Only now, so the complications and tiles this wakes read what was just saved
         recorded.lastHeartRate?.let { (t, bpm) -> LiveHealth.onHeartRate(context, t, bpm) }
         if (recorded.steps.isNotEmpty()) LiveHealth.onActivity(context, lastMove(history, recorded.steps))
+        expireStaleSleep(context)
         rollDay(context)
         HealthAlerts.onNewData(context)
     }
@@ -284,7 +287,9 @@ object HealthCollector {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val changedAt = info.stateChangeTime.toEpochMilli()
         val asleep = info.userActivityState == UserActivityState.USER_ACTIVITY_ASLEEP
-        val sleepStart = prefs.getLong("sleep.start", -1)
+        val saved = prefs.getLong("sleep.start", -1)
+        // A start from a missed wake-up is no sleep at all: start afresh, and don't record it
+        val sleepStart = saved.takeIf { it >= 0 && changedAt - it < STALE_SLEEP_MS } ?: -1
         Log.i(TAG, "User activity: ${info.userActivityState} at ${info.stateChangeTime}")
 
         if (asleep && sleepStart < 0) {
@@ -294,8 +299,8 @@ object HealthCollector {
                 HealthStore.get(context).add(HealthStore.AWAKE, lastEnd, changedAt, 1.0)
             }
             prefs.edit().putLong("sleep.start", changedAt).apply()
-        } else if (!asleep && sleepStart >= 0) {
-            if (changedAt > sleepStart) {
+        } else if (!asleep && saved >= 0) {
+            if (sleepStart >= 0 && changedAt > sleepStart) {
                 HealthStore.get(context).add(HealthStore.SLEEP, sleepStart, changedAt, 1.0)
                 HealthHistory.get(context).addSleep(sleepStart, changedAt)
             }
@@ -304,13 +309,30 @@ object HealthCollector {
         onSleepStateChanged?.invoke(asleep)
     }
 
-    /** The platform said "asleep" and hasn't said otherwise since. */
-    fun isAsleepNow(context: Context): Boolean =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getLong("sleep.start", -1) >= 0
+    /**
+     * Drop an "asleep" whose wake-up never came and tell SleepGuard, so quiet mode lifts even
+     * when the process lives on and nothing else would ask. Runs with every batch; a pref read.
+     */
+    private fun expireStaleSleep(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val saved = prefs.getLong("sleep.start", -1)
+        if (saved < 0 || System.currentTimeMillis() - saved < STALE_SLEEP_MS) return
+        Log.w(TAG, "Asleep since ${Instant.ofEpochMilli(saved)} without waking: dropping it")
+        prefs.edit().remove("sleep.start").apply()
+        onSleepStateChanged?.invoke(false)
+    }
 
-    /** When the stretch of sleep going on now began, or null when awake. */
+    /** The platform said "asleep" and hasn't said otherwise since (within [STALE_SLEEP_MS]). */
+    fun isAsleepNow(context: Context): Boolean = asleepSince(context) != null
+
+    /**
+     * When the stretch of sleep going on now began, or null when awake. A start older than
+     * [STALE_SLEEP_MS] means the wake-up was missed; trusting it would keep Do Not Disturb on
+     * (and reminders off) all day.
+     */
     fun asleepSince(context: Context): Long? =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getLong("sleep.start", -1).takeIf { it >= 0 }
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getLong("sleep.start", -1)
+            .takeIf { it >= 0 && System.currentTimeMillis() - it < STALE_SLEEP_MS }
 
     private fun dayOf(time: Long): Long {
         val c = Calendar.getInstance().apply { timeInMillis = time }

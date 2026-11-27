@@ -25,6 +25,8 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Calendar
 import kotlin.coroutines.resume
@@ -70,6 +72,9 @@ object SleepGuard {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
+    /** One state change at a time: every check-then-act on [isAsleep] runs under it. */
+    private val lock = Mutex()
+
     /** Called after quiet mode turns on or off (the iPhone link pushes the new state). */
     @Volatile var onStateChanged: (() -> Unit)? = null
 
@@ -101,7 +106,7 @@ object SleepGuard {
         val pending = alarmIntent(context)
         if (!SettingsManager.get(context).isSleepGuardEnabled) {
             alarms.cancel(pending)
-            if (isAsleep(context)) scope.launch { wakeUp(context) }
+            if (isAsleep(context)) scope.launch { lock.withLock { if (isAsleep(context)) wakeUp(context) } }
             return
         }
         if (usesWatchSleepDetection) {
@@ -124,7 +129,7 @@ object SleepGuard {
     fun check(context: Context, onDone: () -> Unit = {}) {
         scope.launch {
             try {
-                evaluate(context.applicationContext)
+                lock.withLock { evaluate(context.applicationContext) }
             } catch (e: Exception) {
                 Log.w(TAG, "Sleep check failed", e)
             } finally {
@@ -136,13 +141,23 @@ object SleepGuard {
     /**
      * The watch's own sleep detection (Health Services, see HealthCollector) changed state. Where
      * the watch has it, this is what drives quiet mode; the step-counter check stays as a fallback.
+     *
+     * [asleep] is only the trigger. Each run takes [lock] and follows HealthCollector's state as
+     * it is by then: ASLEEP and AWAKE close together (or the catch-up on every process start)
+     * used to run in parallel on Dispatchers.Default, and acting on a stale value could leave
+     * Do Not Disturb on all day, silently holding back every reminder.
      */
+    @Suppress("UNUSED_PARAMETER")
     fun onPlatformSleepState(context: Context, asleep: Boolean) {
         if (!SettingsManager.get(context).isSleepGuardEnabled) return
+        val app = context.applicationContext
         scope.launch {
-            when {
-                asleep && !isAsleep(context) -> fallAsleep(context)
-                !asleep && isAsleep(context) -> wakeUp(context)
+            lock.withLock {
+                val asleepNow = HealthCollector.isAsleepNow(app)
+                when {
+                    asleepNow && !isAsleep(app) -> fallAsleep(app)
+                    !asleepNow && isAsleep(app) -> wakeUp(app)
+                }
             }
         }
     }
