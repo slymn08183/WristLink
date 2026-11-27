@@ -5,11 +5,35 @@ characteristic, split to the MTU both ways. Version 6 adds the messages below. A
 iPhone app keeps working: it never sends the new requests and skips sample types it doesn't know.
 The iPhone app checks `protocol` in INFO before using anything here.
 
+## Framing robustness
+
+- A SYNC message may start with an extra `\n`. The watch sends one before the next message
+  whenever part of an earlier one may have been lost (a dropped queue, a disconnect, a new
+  subscription, a watch service restart, a lost send confirmation). It ends a partial line the
+  iPhone still holds; that junk line (or the empty one) simply fails to decode and is ignored.
+  A message whose send confirmation got lost is sent again from the start behind such a newline.
+- Pieces are at most min(MTU the iPhone exchanged, MTU the watch's own client exchanged) - 3
+  bytes (and at most 512).
+- The iPhone app clears its reassembly buffer when the link drops, when the watch's services
+  change, and when the SYNC subscription changes.
+
 ## INFO additions
 
 - `protocol`: 6
 - `workoutsPending`: workouts recorded on the watch that the iPhone hasn't confirmed yet.
 - `hr`: `{"bpm": 72, "t": <ms>}` — the latest heart rate, or absent.
+
+A read always returns the full JSON (long reads are served from the copy taken at offset 0). A
+notification has to fit one packet, so the watch notifies:
+
+1. the full JSON when it fits; else
+2. a compact one: `"compact": true` plus `protocol`, `battery`, `charging`, `drops`,
+   `notifications`, `pending`, `workoutsPending`, `weatherAt` (and `hr` if it fits). The iPhone
+   keeps the other fields from the last full read; else
+3. `{"changed": true}`: the iPhone reads the characteristic.
+
+Changes within 1.5 s are notified once, and a notification equal to the last one is skipped.
+The watch notifies after saving a workout, so the iPhone learns about it without a reconnect.
 
 ## Sample stream (`pull` / `batch` / `ack`)
 

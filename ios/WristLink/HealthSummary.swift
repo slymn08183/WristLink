@@ -134,6 +134,11 @@ final class SummaryFeed: ObservableObject {
     var send: (([String: Any]) -> Void)?
 
     private var timeout: DispatchWorkItem?
+    /// When bytes last arrived on the sync channel (system uptime, s).
+    private var lastActivity: TimeInterval = 0
+    private var requestedAt: TimeInterval = 0
+    /// Past the timeout, given up only once the sync channel has been quiet this long.
+    private static let idleLimit: TimeInterval = 30
     private static var cacheURL: URL { URL.documentsDirectory.appending(path: "summary.json") }
     private static var historyURL: URL { URL.documentsDirectory.appending(path: "health-history.json") }
     /// Set once a long summary filled the history, so later requests can be short.
@@ -167,14 +172,34 @@ final class SummaryFeed: ObservableObject {
         loading = true
         send(["op": "summary", "days": days])
         // A watch that never answers mustn't block the next request. 90 days are ~100 KB,
-        // which takes a while over Bluetooth.
+        // which takes a while over Bluetooth: as long as bytes keep arriving, it waits on.
+        requestedAt = ProcessInfo.processInfo.systemUptime
+        lastActivity = requestedAt
+        armTimeout(after: days > 14 ? 60 : 20)
+    }
+
+    /// Bytes arrived on the sync channel (WatchLink): the reply may still be coming in.
+    func noteActivity(at time: TimeInterval) {
+        if loading { lastActivity = time }
+    }
+
+    private func armTimeout(after seconds: TimeInterval) {
         timeout?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            self?.loading = false
-            self?.lastError = "The watch didn't send its numbers."
-        }
+        let work = DispatchWorkItem { [weak self] in self?.timeoutFired() }
         timeout = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + (days > 14 ? 60 : 20), execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
+    }
+
+    private func timeoutFired() {
+        guard loading else { return }
+        let quiet = ProcessInfo.processInfo.systemUptime - lastActivity
+        // Only bytes since the request count; a watch silent from the start fails on time
+        if lastActivity > requestedAt && quiet < Self.idleLimit {
+            armTimeout(after: Self.idleLimit - quiet)
+            return
+        }
+        loading = false
+        lastError = "The watch didn't send its numbers."
     }
 
     /// The watch's reply arrived on the sync channel.
