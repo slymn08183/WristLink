@@ -39,7 +39,13 @@ class BleConnectionManager(
 
     companion object {
         private const val TAG = "BleConnectionManager"
-        private const val DESIRED_MTU = 256
+        /**
+         * The largest ATT MTU. The link has one MTU for both directions and both roles, so this
+         * exchange also sets the size of the companion server's notifications to the iPhone app
+         * (which uses the smaller of the two exchanges): asking for less would split a workout
+         * into twice as many packets.
+         */
+        private const val DESIRED_MTU = 517
         private const val BOND_TIMEOUT_MS = 30_000L
 
         /** [speedUpForTransfer] owners. */
