@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.wristlink.ble.BondManager
+import com.wristlink.health.HealthAlerts
 import com.wristlink.settings.SettingsManager
 
 /**
@@ -24,6 +25,9 @@ class BootReceiver : BroadcastReceiver() {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED &&
             intent.action != Intent.ACTION_MY_PACKAGE_REPLACED
         ) return
+
+        // Reboots and updates drop alarms; the move reminder needs no iPhone, so before the checks below
+        HealthAlerts.ensureScheduled(context)
 
         if (!SettingsManager.get(context).isOnboardingComplete) return
         if (BondManager(context).getSavedBondedAddress() == null) {

@@ -115,14 +115,19 @@ class HealthProfile private constructor(context: Context) {
         fun current(context: Context): Profile = get(context).state.value
     }
 
+    private val appContext = context.applicationContext
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private val _state = MutableStateFlow(load())
     val state: StateFlow<Profile> = _state.asStateFlow()
 
     fun update(transform: (Profile) -> Profile) {
-        val next = transform(_state.value).copy(configured = true)
+        val previous = _state.value
+        val next = transform(previous).copy(configured = true)
         save(next)
         _state.value = next
+        // The move reminder is an alarm: arm or cancel it when switched, from the watch
+        // (Profile & goals) or the iPhone alike, rather than waiting for the next steps
+        if (next.inactivityAlert != previous.inactivityAlert) HealthAlerts.ensureScheduled(appContext)
     }
 
     /** One field from the iPhone app; returns an error message or null. */

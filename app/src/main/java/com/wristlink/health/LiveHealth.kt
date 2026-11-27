@@ -48,16 +48,29 @@ object LiveHealth {
         refresh(context)
     }
 
-    /** New steps arrived; [lastMove] is the end of the newest stretch with steps. */
-    fun onActivity(context: Context, lastMove: Long) {
+    /**
+     * New steps arrived. [lastMove] is when the wearer last really moved (see
+     * [InactivityRules.lastMove]), or null when these steps were only a few stray ones: those
+     * must not keep putting the "Time to move" reminder off.
+     */
+    fun onActivity(context: Context, lastMove: Long?) {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        if (lastMove > prefs.getLong("lastMove", 0)) prefs.edit().putLong("lastMove", lastMove).apply()
-        HealthAlerts.onMoved(context, lastMove)
+        if (lastMove != null && lastMove > prefs.getLong("lastMove", 0)) {
+            prefs.edit().putLong("lastMove", lastMove).apply()
+            HealthAlerts.onMoved(context)
+        }
         refresh(context)
     }
 
+    /** When the wearer last really moved; 0 when never seen (see [initLastMove]). */
     fun lastMove(context: Context): Long =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getLong("lastMove", 0)
+
+    /** Never seen moving (fresh install): count stillness from [now], not from 1970. */
+    fun initLastMove(context: Context, now: Long) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        if (!prefs.contains("lastMove")) prefs.edit().putLong("lastMove", now).apply()
+    }
 
     /** Ask our complications and tiles to redraw. */
     fun refresh(context: Context, force: Boolean = false) {

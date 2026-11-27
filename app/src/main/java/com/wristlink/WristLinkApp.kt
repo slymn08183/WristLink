@@ -35,6 +35,9 @@ class WristLinkApp : Application() {
         // No move reminders or resting heart-rate alerts mid-workout
         HealthAlerts.workoutActive = { WorkoutState.active.value }
         HealthCollector.register(this)
+        // Steps alone used to arm the move reminder; without any it never fired. Cheap when
+        // already armed, so fine on every process start
+        HealthAlerts.ensureScheduled(this)
         SleepGuard.start(this)
     }
 

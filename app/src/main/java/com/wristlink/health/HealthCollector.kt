@@ -127,17 +127,44 @@ object HealthCollector {
         val history = HealthHistory.get(context)
         val boot = bootInstant()
 
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        followClockJump(context, prefs, boot)
+        // The batch's running totals go into one write, not one per point, and only once the
+        // samples they account for are saved
+        val edit = prefs.edit()
         // One transaction per database for the whole batch: one disk sync, not one per reading
-        store.inTransaction { history.inTransaction { record(context, points, store, history, boot) } }
+        val recorded = store.inTransaction { history.inTransaction { record(context, points, store, history, boot, prefs, edit) } }
+        edit.apply()
+
+        // Only now, so the complications and tiles this wakes read what was just saved
+        recorded.lastHeartRate?.let { (t, bpm) -> LiveHealth.onHeartRate(context, t, bpm) }
+        if (recorded.steps.isNotEmpty()) LiveHealth.onActivity(context, lastMove(history, recorded.steps))
         rollDay(context)
         HealthAlerts.onNewData(context)
     }
 
-    private fun record(context: Context, points: DataPointContainer, store: HealthStore, history: HealthHistory, boot: Instant) {
-        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        followClockJump(context, prefs, boot)
-        // The batch's running totals go into one write at the end, not one per point
-        val edit = prefs.edit()
+    private class Recorded(val steps: List<DailyTotals.Delta>, val lastHeartRate: Pair<Long, Double>?)
+
+    /**
+     * When the wearer last really moved, judged from the per-minute steps around the new ones
+     * rather than from the deltas themselves: deltas cover anything from seconds to hours, and
+     * a few stray steps at a desk must not count as getting up.
+     */
+    private fun lastMove(history: HealthHistory, steps: List<DailyTotals.Delta>): Long? {
+        val to = steps.maxOf { it.to }
+        val from = maxOf(steps.minOf { it.from }, to - 2 * 3600_000L) - InactivityRules.MOVE_WINDOW_MIN * InactivityRules.MINUTE_MS
+        return InactivityRules.lastMove(history.stepMinutes(from, to + InactivityRules.MINUTE_MS))?.coerceAtMost(to)
+    }
+
+    private fun record(
+        context: Context,
+        points: DataPointContainer,
+        store: HealthStore,
+        history: HealthHistory,
+        boot: Instant,
+        prefs: SharedPreferences,
+        edit: SharedPreferences.Editor
+    ): Recorded {
 
         // Daily types are running totals since the start of the day; keep what was added since
         // last time, spread over the minutes it covers, and queue it for Apple Health
@@ -167,7 +194,6 @@ object HealthCollector {
             val active = HealthMetrics.activePart(context, d.from, d.to, d.amount, dayTotal = d.total, periodStart = d.periodStart)
             if (active > 0.5 && !workingOut) store.add(HealthStore.ACTIVE_CALORIES, d.from, d.to, active)
         }
-        edit.apply()
 
         val heartRates = points.getData(DataType.HEART_RATE_BPM)
             .filter { it.value > 0 }
@@ -184,8 +210,7 @@ object HealthCollector {
             }
             history.addHeartRate(t, bpm)
         }
-        heartRates.lastOrNull()?.let { (t, bpm) -> LiveHealth.onHeartRate(context, t, bpm) }
-        if (steps.isNotEmpty()) LiveHealth.onActivity(context, lastMove = steps.last().to)
+        return Recorded(steps, heartRates.lastOrNull())
     }
 
     /** The last daily total seen for [type]. */
