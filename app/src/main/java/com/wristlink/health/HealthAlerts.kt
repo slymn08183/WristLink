@@ -45,10 +45,15 @@ object HealthAlerts {
     private const val KEY_PLANNED_CONFIRM = "inactive.confirm"
     private const val HR_WINDOW_MS = 10 * MINUTE_MS
     private const val HR_ALERT_COOLDOWN_MS = 60 * MINUTE_MS
+    /** A window ending longer ago than this is old news (watch off the wrist since). */
+    private const val HR_STALE_MS = 20 * MINUTE_MS
+    /** Heart rate after a workout this recent still counts as recovering, not resting. */
+    private const val HR_RECOVERY_MS = 10 * MINUTE_MS
 
     private const val ID_HR = 7101
     private const val ID_INACTIVE = 7102
     private const val ID_GOAL = 7103
+    private const val ID_BADGE = 7104
 
     const val ACTION_CHECK_INACTIVE = "com.wristlink.health.CHECK_INACTIVE"
     const val ACTION_SNOOZE = "com.wristlink.health.SNOOZE_INACTIVE"
@@ -72,14 +77,24 @@ object HealthAlerts {
         val now = System.currentTimeMillis()
         val prefs = prefs(context)
         if (now - prefs.getLong("hr.last", 0) < HR_ALERT_COOLDOWN_MS) return
-        val minutes = HealthHistory.get(context).minutes(now - HR_WINDOW_MS, now)
+        // The window ends at the newest reading, not now: readings come in batches minutes late,
+        // and a window ending now would miss its last minutes and rarely have 8 of 10
+        val newest = LiveHealth.latest(context)?.time ?: return
+        if (now - newest > HR_STALE_MS) return
+        val end = newest - Math.floorMod(newest, MINUTE_MS) + MINUTE_MS
+        val from = end - HR_WINDOW_MS
+        val history = HealthHistory.get(context)
+        // Heart rate takes a while to come down after a workout; that isn't "while resting"
+        if (history.workouts(from - HR_RECOVERY_MS, end).isNotEmpty()) return
+        val minutes = history.minutes(from, end)
         val withHr = minutes.filter { it.hrAvg != null }
         // Needs a reading most minutes, and no walking in between
         if (withHr.size < 8 || minutes.sumOf { it.steps } > 20) return
         val high = withHr.all { it.hrAvg!! > profile.hrHigh }
         val low = withHr.all { it.hrAvg!! < profile.hrLow }
         if (!high && !low) return
-        prefs.edit().putLong("hr.last", now).apply()
+        // commit, not apply: if the process dies right after, the alert must not come twice
+        prefs.edit().putLong("hr.last", now).commit()
         val bpm = withHr.last().hrAvg!!.roundToInt()
         notify(
             context, ID_HR,
@@ -102,12 +117,15 @@ object HealthAlerts {
         fun once(key: String, block: () -> Unit) {
             val prefs = prefs(context)
             if (prefs.getLong("goal.$key", 0) == today) return
-            prefs.edit().putLong("goal.$key", today).apply()
+            // commit, not apply: a process death right after must not repeat the nudge
+            prefs.edit().putLong("goal.$key", today).commit()
             block()
         }
 
+        var goalReachedNow = false
         when {
             steps >= goal -> once("done") {
+                goalReachedNow = true
                 notify(context, ID_GOAL, "Step goal reached", "${steps.roundToInt()} steps today. Nice work!", HealthActivity.SCREEN_TODAY)
             }
             steps >= goal * 0.9 -> once("almost") {
@@ -120,7 +138,12 @@ object HealthAlerts {
         for (badge in listOf(40_000, 30_000, 20_000, 10_000)) {
             if (steps >= badge) {
                 once("badge$badge") {
-                    notify(context, ID_GOAL, "${badge / 1000}K steps", "New badge: ${badge / 1000},000 steps in a day", HealthActivity.SCREEN_TODAY)
+                    // Its own notification, so it doesn't replace "Step goal reached"; silent when
+                    // that one just buzzed for the same steps (a 10,000 goal hits both at once)
+                    notify(
+                        context, ID_BADGE, "${badge / 1000}K steps", "New badge: ${badge / 1000},000 steps in a day",
+                        HealthActivity.SCREEN_TODAY, silent = goalReachedNow
+                    )
                 }
                 break
             }
@@ -253,7 +276,8 @@ object HealthAlerts {
         title: String,
         text: String,
         screen: String,
-        action: NotificationCompat.Action? = null
+        action: NotificationCompat.Action? = null,
+        silent: Boolean = false
     ) {
         val nm = context.getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(
@@ -274,6 +298,7 @@ object HealthAlerts {
             .setContentIntent(open)
             .setAutoCancel(true)
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setSilent(silent)
             .apply { if (action != null) addAction(action) }
             .build()
         runCatching { nm.notify(id, notification) }.onFailure { Log.w(TAG, "Couldn't notify", it) }
