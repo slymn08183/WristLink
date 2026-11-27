@@ -14,6 +14,8 @@ struct WorkoutRecord: Codable, Identifiable {
         /// Meters.
         let d: Double?
         let hr: Double?
+        /// Time not paused within the lap, ms; missing from older watch versions.
+        let a: Double?
     }
 
     /// The watch's id for acknowledging it; ids can repeat across watch reinstalls, so the

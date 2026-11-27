@@ -48,6 +48,8 @@ object WorkoutSync {
                             .put("e", lap.end)
                             .put("d", round(lap.distance, 1))
                             .put("hr", lap.avgHr?.roundToInt() ?: JSONObject.NULL)
+                            // Time not paused within the lap, ms (missing for laps from older versions)
+                            .put("a", lap.activeMs ?: JSONObject.NULL)
                     )
                 }
             })

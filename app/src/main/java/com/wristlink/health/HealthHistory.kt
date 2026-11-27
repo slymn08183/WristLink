@@ -20,7 +20,7 @@ import android.database.sqlite.SQLiteOpenHelper
  * Everything is epoch milliseconds. Kept for [MAX_AGE_DAYS].
  */
 class HealthHistory private constructor(context: Context) :
-    SQLiteOpenHelper(context, "history.db", null, 1) {
+    SQLiteOpenHelper(context, "history.db", null, 2) {
 
     companion object {
         const val MINUTE_MS = 60_000L
@@ -85,7 +85,11 @@ class HealthHistory private constructor(context: Context) :
         val synced: Boolean
     )
 
-    data class Lap(val workoutId: Long, val n: Int, val start: Long, val end: Long, val distance: Double, val avgHr: Double?)
+    data class Lap(
+        val workoutId: Long, val n: Int, val start: Long, val end: Long, val distance: Double, val avgHr: Double?,
+        /** Time not paused within the lap; null for laps saved before version 2. */
+        val activeMs: Long? = null
+    )
 
     data class TrackPoint(
         val t: Long,
@@ -115,7 +119,7 @@ class HealthHistory private constructor(context: Context) :
         )
         db.execSQL(
             "CREATE TABLE lap (workout INTEGER NOT NULL, n INTEGER NOT NULL, start INTEGER NOT NULL, " +
-                "end INTEGER NOT NULL, distance REAL NOT NULL DEFAULT 0, avg_hr REAL, PRIMARY KEY (workout, n))"
+                "end INTEGER NOT NULL, distance REAL NOT NULL DEFAULT 0, avg_hr REAL, active_ms INTEGER, PRIMARY KEY (workout, n))"
         )
         db.execSQL(
             "CREATE TABLE track (workout INTEGER NOT NULL, t INTEGER NOT NULL, lat REAL, lon REAL, alt REAL, " +
@@ -123,7 +127,10 @@ class HealthHistory private constructor(context: Context) :
         )
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        // 2: laps keep their active time, so a lap with a pause in it isn't shown longer than it was
+        if (oldVersion < 2) db.execSQL("ALTER TABLE lap ADD COLUMN active_ms INTEGER")
+    }
 
     // ---- Minutes ----
 
@@ -262,6 +269,7 @@ class HealthHistory private constructor(context: Context) :
                     put("end", lap.end)
                     put("distance", lap.distance)
                     lap.avgHr?.let { put("avg_hr", it) }
+                    lap.activeMs?.let { put("active_ms", it) }
                 }, SQLiteDatabase.CONFLICT_REPLACE)
             }
             for (p in track) {
@@ -307,13 +315,14 @@ class HealthHistory private constructor(context: Context) :
 
     fun laps(workoutId: Long): List<Lap> =
         readableDatabase.rawQuery(
-            "SELECT workout, n, start, end, distance, avg_hr FROM lap WHERE workout = ? ORDER BY n",
+            "SELECT workout, n, start, end, distance, avg_hr, active_ms FROM lap WHERE workout = ? ORDER BY n",
             arrayOf(workoutId.toString())
         ).use { c ->
             buildList {
                 while (c.moveToNext()) add(
                     Lap(c.getLong(0), c.getInt(1), c.getLong(2), c.getLong(3), c.getDouble(4),
-                        if (c.isNull(5)) null else c.getDouble(5))
+                        if (c.isNull(5)) null else c.getDouble(5),
+                        if (c.isNull(6)) null else c.getLong(6))
                 )
             }
         }

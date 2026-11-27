@@ -559,7 +559,9 @@ struct WorkoutDetailView: View {
         }
     }
 
+    /// Moving time when the watch sent it (pauses left out), else start to end.
     private func lapTime(_ lap: WorkoutRecord.Lap) -> String {
+        if let active = lap.a, active > 0 { return Format.elapsed(active / 1000) }
         guard let s = lap.s, let e = lap.e, e > s else { return "–" }
         return Format.elapsed((e - s) / 1000)
     }

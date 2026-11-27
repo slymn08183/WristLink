@@ -237,7 +237,7 @@ fun WorkoutSummaryScreen(id: Long, onDeleted: () -> Unit) {
                 for (lap in d.laps) {
                     item {
                         LapRow(
-                            WorkoutState.Lap(lap.n, lap.start, lap.end, activeMs = lap.end - lap.start, distance = lap.distance, avgHr = lap.avgHr),
+                            WorkoutState.Lap(lap.n, lap.start, lap.end, activeMs = lap.activeMs ?: (lap.end - lap.start), distance = lap.distance, avgHr = lap.avgHr),
                             type
                         )
                     }

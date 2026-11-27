@@ -288,7 +288,7 @@ class WorkoutRecorder(
             summary = summary.toString(),
             synced = false
         )
-        val savedLaps = laps.map { HealthHistory.Lap(0, it.n, it.start, it.end, it.distance, it.avgHr) }
+        val savedLaps = laps.map { HealthHistory.Lap(0, it.n, it.start, it.end, it.distance, it.avgHr, it.activeMs) }
         return Result(workout, savedLaps, track, lastHr)
     }
 

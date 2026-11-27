@@ -102,7 +102,7 @@ Reply when there is none: `{"op":"workout","none":true}`. Otherwise:
 {"op":"workout", "id":12, "type":"run", "start":<ms>, "end":<ms>, "activeMs":1834000,
  "distance":5012.3, "calories":402, "steps":5320, "avgHr":151, "maxHr":178,
  "elevationGain":34, "summary":{...free-form extra fields...},
- "laps":[{"n":1,"s":<ms>,"e":<ms>,"d":1000,"hr":148}],
+ "laps":[{"n":1,"s":<ms>,"e":<ms>,"d":1000,"hr":148,"a":<active ms>}],
  "track":[[<ms>, lat, lon, alt, hr, speed], ...]}
 ```
 
