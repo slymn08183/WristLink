@@ -83,7 +83,7 @@ object HealthAlerts {
         if (!profile.goalNudges) return
         val now = System.currentTimeMillis()
         val today = HealthMetrics.startOfDay(now)
-        val steps = HealthHistory.get(context).minutes(today, now + 1).sumOf { it.steps }
+        val steps = HealthHistory.get(context).steps(today, now + 1)
         val goal = profile.stepGoal.toDouble()
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
 

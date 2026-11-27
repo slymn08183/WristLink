@@ -28,7 +28,7 @@ class ActivityComplicationService : SuspendingComplicationDataSourceService() {
         val now = System.currentTimeMillis()
         val steps = withContext(Dispatchers.IO) {
             val today = HealthMetrics.startOfDay(now)
-            HealthHistory.get(this@ActivityComplicationService).minutes(today, now + 1).sumOf { it.steps }
+            HealthHistory.get(this@ActivityComplicationService).steps(today, now + 1)
         }
         return build(request.complicationType, steps.roundToInt(), HealthProfile.current(this).stepGoal)
     }

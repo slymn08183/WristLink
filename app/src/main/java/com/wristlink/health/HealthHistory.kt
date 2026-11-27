@@ -33,6 +33,27 @@ class HealthHistory private constructor(context: Context) :
             }
     }
 
+    init {
+        // Heart rate arrives about once a second: write-ahead logging makes a commit an append
+        // rather than a journal rewrite, and lets the screens read while a batch is written
+        setWriteAheadLoggingEnabled(true)
+    }
+
+    /**
+     * Run [block] as one transaction. A Health Services batch carries hundreds of heart-rate
+     * readings; one commit for all of them is one disk sync instead of hundreds. Transactions
+     * inside nest (Android commits at the outermost one).
+     */
+    fun <T> inTransaction(block: () -> T): T {
+        val db = writableDatabase
+        db.beginTransactionNonExclusive()
+        try {
+            return block().also { db.setTransactionSuccessful() }
+        } finally {
+            db.endTransaction()
+        }
+    }
+
     data class Minute(
         val t: Long,
         val steps: Double,
@@ -178,6 +199,20 @@ class HealthHistory private constructor(context: Context) :
                 }
             }
         }
+
+    /** Total steps in [from, to), summed by SQLite instead of loading every minute. */
+    fun steps(from: Long, to: Long): Double =
+        readableDatabase.rawQuery(
+            "SELECT COALESCE(SUM(steps), 0) FROM minute WHERE t >= ? AND t < ?",
+            arrayOf(from.toString(), to.toString())
+        ).use { c -> if (c.moveToFirst()) c.getDouble(0) else 0.0 }
+
+    /** Minutes with steps in [from, to), as minute start → steps. */
+    fun stepMinutes(from: Long, to: Long): Map<Long, Double> =
+        readableDatabase.rawQuery(
+            "SELECT t, steps FROM minute WHERE t >= ? AND t < ? AND steps > 0",
+            arrayOf(from.toString(), to.toString())
+        ).use { c -> buildMap { while (c.moveToNext()) put(c.getLong(0), c.getDouble(1)) } }
 
     // ---- Sleep ----
 

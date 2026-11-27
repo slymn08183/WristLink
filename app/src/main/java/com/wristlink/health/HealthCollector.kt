@@ -121,6 +121,13 @@ object HealthCollector {
         val history = HealthHistory.get(context)
         val boot = bootInstant()
 
+        // One transaction per database for the whole batch: one disk sync, not one per reading
+        store.inTransaction { history.inTransaction { record(context, points, store, history, boot) } }
+        rollDay(context)
+        HealthAlerts.onNewData(context)
+    }
+
+    private fun record(context: Context, points: DataPointContainer, store: HealthStore, history: HealthHistory, boot: Instant) {
         // Daily types are running totals since midnight; keep what was added since last time,
         // spread over the minutes it covers, and queue it for Apple Health
         fun daily(type: String, column: String, totals: List<Pair<Long, Double>>, outbox: Boolean = true) =
@@ -162,9 +169,6 @@ object HealthCollector {
         }
         heartRates.lastOrNull()?.let { (t, bpm) -> LiveHealth.onHeartRate(context, t, bpm) }
         if (steps.isNotEmpty()) LiveHealth.onActivity(context, lastMove = steps.last().second)
-
-        rollDay(context)
-        HealthAlerts.onNewData(context)
     }
 
     /** One stretch of a daily total: from, to, amount added. */
@@ -201,8 +205,8 @@ object HealthCollector {
     }
 
     /**
-     * Once per day: queue yesterday's resting heart rate for Apple Health and drop history
-     * older than HealthHistory keeps.
+     * Once per day: queue yesterday's resting heart rate for Apple Health, drop history older
+     * than HealthHistory keeps, and drop outbox samples the iPhone never picked up.
      */
     private fun rollDay(context: Context) {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -216,6 +220,7 @@ object HealthCollector {
             HealthStore.get(context).add(HealthStore.RESTING_HR, yesterday, yesterday, it.toDouble())
         }
         HealthHistory.get(context).prune()
+        HealthStore.get(context).pruneOld()
     }
 
     fun onUserActivity(context: Context, info: UserActivityInfo) {

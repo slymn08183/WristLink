@@ -236,10 +236,10 @@ object HealthMetrics {
         val history = HealthHistory.get(context)
         var day = startOfDay(now)
         var count = 0
-        if (history.minutes(day, day + DAY_MS).sumOf { it.steps } >= goal) count++
+        if (history.steps(day, day + DAY_MS) >= goal) count++
         repeat(HealthHistory.MAX_AGE_DAYS) {
             day = startOfDay(day - HOUR_MS * 12)
-            if (history.minutes(day, day + DAY_MS).sumOf { it.steps } < goal) return count
+            if (history.steps(day, day + DAY_MS) < goal) return count
             count++
         }
         return count

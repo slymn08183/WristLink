@@ -42,6 +42,22 @@ class HealthStore private constructor(context: Context) :
             .put("id", id).put("t", type).put("s", start).put("e", end).put("v", value)
     }
 
+    init {
+        // A Health Services batch adds many rows at once; see HealthHistory
+        setWriteAheadLoggingEnabled(true)
+    }
+
+    /** Run [block] as one transaction: one disk sync for a whole Health Services batch. */
+    fun <T> inTransaction(block: () -> T): T {
+        val db = writableDatabase
+        db.beginTransactionNonExclusive()
+        try {
+            return block().also { db.setTransactionSuccessful() }
+        } finally {
+            db.endTransaction()
+        }
+    }
+
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             "CREATE TABLE samples (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, " +
@@ -81,8 +97,14 @@ class HealthStore private constructor(context: Context) :
     /** The iPhone saved everything up to [id]; also drops anything too old to matter. */
     fun acknowledge(id: Long) {
         writableDatabase.delete("samples", "id <= ?", arrayOf(id.toString()))
-        writableDatabase.delete(
-            "samples", "end < ?", arrayOf((System.currentTimeMillis() - MAX_AGE_MS).toString())
-        )
+        pruneOld()
+    }
+
+    /**
+     * Drop samples older than [MAX_AGE_MS]. HealthCollector also runs this daily: if the iPhone
+     * never acknowledges anything, the table would otherwise grow forever.
+     */
+    fun pruneOld(now: Long = System.currentTimeMillis()) {
+        writableDatabase.delete("samples", "end < ?", arrayOf((now - MAX_AGE_MS).toString()))
     }
 }
