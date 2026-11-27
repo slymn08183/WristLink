@@ -213,8 +213,8 @@ private struct WatchTab: View {
                 }
                 .padding()
             }
-            .background(Theme.background)
             .connectionBanner()
+            .background(Theme.background)
             .navigationTitle(link.watchName ?? "Watch")
             .refreshable {
                 link.refreshSettings()
@@ -461,8 +461,8 @@ private struct HealthTab: View {
                 }
                 .padding()
             }
-            .background(Theme.background)
             .connectionBanner()
+            .background(Theme.background)
             .navigationTitle("Health")
             .refreshable {
                 link.refreshSummary()
@@ -627,12 +627,19 @@ private struct SettingsTab: View {
                 }
             }
             .connectionBanner()
+            .background(Theme.background)
             .navigationTitle("Watch settings")
         }
     }
 
     private func form(_ s: WatchSettings) -> some View {
         Form {
+            if let error = link.settingsError {
+                Section {
+                    Label(error, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                }
+            }
+
             // Everything that changes the watch waits for it; the weather (an iPhone setting) and
             // About stay usable while it's away
             Group {
@@ -666,12 +673,6 @@ private struct SettingsTab: View {
 
     /// Notifications, calls, iPhone, sleep and profile.
     @ViewBuilder private func watchSections(_ s: WatchSettings) -> some View {
-        if let error = link.settingsError {
-            Section {
-                Label(error, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-            }
-        }
-
         // Names and descriptions match the watch's own settings screen
         Section {
             toggle("Vibration", "iphone.radiowaves.left.and.right", \.vibration, "vibration", s,
