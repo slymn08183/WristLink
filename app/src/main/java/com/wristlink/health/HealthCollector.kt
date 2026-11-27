@@ -2,13 +2,16 @@ package com.wristlink.health
 
 import android.Manifest
 import android.content.Context
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.os.SystemClock
+import android.provider.Settings
 import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.health.services.client.HealthServices
 import androidx.health.services.client.data.DataPointContainer
 import androidx.health.services.client.data.DataType
+import androidx.health.services.client.data.IntervalDataPoint
 import androidx.health.services.client.data.PassiveListenerConfig
 import androidx.health.services.client.data.UserActivityInfo
 import androidx.health.services.client.data.UserActivityState
@@ -37,6 +40,9 @@ object HealthCollector {
     private const val PREFS = "health_collector"
     private const val HR_QUEUE_INTERVAL_MS = 60_000L
     private const val HR_QUEUE_JUMP_BPM = 15.0
+    private const val CLOCK_JUMP_MS = 2 * 60_000L
+
+    private val DAILY_TYPES = listOf(HealthStore.STEPS, HealthStore.DISTANCE, HealthStore.FLOORS, HealthStore.CALORIES)
 
     /** The last heart rate queued for Apple Health; in memory, a restart just queues the next one. */
     @Volatile private var lastQueuedHr: Pair<Long, Double>? = null
@@ -128,29 +134,40 @@ object HealthCollector {
     }
 
     private fun record(context: Context, points: DataPointContainer, store: HealthStore, history: HealthHistory, boot: Instant) {
-        // Daily types are running totals since midnight; keep what was added since last time,
-        // spread over the minutes it covers, and queue it for Apple Health
-        fun daily(type: String, column: String, totals: List<Pair<Long, Double>>, outbox: Boolean = true) =
-            recordDailyDelta(context, type, totals).onEach { (from, to, delta) ->
-                history.addSpread(column, from, to, delta)
-                if (outbox) store.add(type, from, to, delta)
-            }
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        followClockJump(context, prefs, boot)
+        // The batch's running totals go into one write at the end, not one per point
+        val edit = prefs.edit()
 
-        val steps = daily(HealthStore.STEPS, "steps",
-            points.getData(DataType.STEPS_DAILY).map { it.getEndInstant(boot).toEpochMilli() to it.value.toDouble() })
+        // Daily types are running totals since the start of the day; keep what was added since
+        // last time, spread over the minutes it covers, and queue it for Apple Health
+        fun daily(type: String, column: String, data: List<IntervalDataPoint<out Number>>, outbox: Boolean = true): List<DailyTotals.Delta> {
+            if (data.isEmpty()) return emptyList()
+            val totals = data.map {
+                Triple(it.getStartInstant(boot).toEpochMilli(), it.getEndInstant(boot).toEpochMilli(), it.value.toDouble())
+            }
+            val (state, deltas) = DailyTotals.fold(loadTotal(prefs, type), totals)
+            if (state != null) saveTotal(edit, type, state)
+            for (d in deltas) {
+                history.addSpread(column, d.from, d.to, d.amount)
+                if (outbox) store.add(type, d.from, d.to, d.amount)
+            }
+            return deltas
+        }
+
+        val steps = daily(HealthStore.STEPS, "steps", points.getData(DataType.STEPS_DAILY))
         // A workout carries its own distance and energy to Apple Health; the passive stream
         // leaves those out meanwhile so they aren't counted twice
         val workingOut = HealthAlerts.workoutActive()
-        daily(HealthStore.DISTANCE, "distance", outbox = !workingOut, totals =
-            points.getData(DataType.DISTANCE_DAILY).map { it.getEndInstant(boot).toEpochMilli() to it.value })
-        daily(HealthStore.FLOORS, "floors",
-            points.getData(DataType.FLOORS_DAILY).map { it.getEndInstant(boot).toEpochMilli() to it.value })
+        daily(HealthStore.DISTANCE, "distance", points.getData(DataType.DISTANCE_DAILY), outbox = !workingOut)
+        daily(HealthStore.FLOORS, "floors", points.getData(DataType.FLOORS_DAILY))
         // Apple Health wants active energy; Health Services' total includes the resting burn
-        val calories = points.getData(DataType.CALORIES_DAILY).map { it.getEndInstant(boot).toEpochMilli() to it.value }
-        daily(HealthStore.CALORIES, "calories", calories, outbox = false).forEach { (from, to, delta) ->
-            val active = HealthMetrics.activePart(context, from, to, delta, dayTotal = calories.maxOf { it.second })
-            if (active > 0.5 && !workingOut) store.add(HealthStore.ACTIVE_CALORIES, from, to, active)
+        daily(HealthStore.CALORIES, "calories", points.getData(DataType.CALORIES_DAILY), outbox = false).forEach { d ->
+            // The total this delta came from, not the batch's largest: a batch can straddle midnight
+            val active = HealthMetrics.activePart(context, d.from, d.to, d.amount, dayTotal = d.total)
+            if (active > 0.5 && !workingOut) store.add(HealthStore.ACTIVE_CALORIES, d.from, d.to, active)
         }
+        edit.apply()
 
         val heartRates = points.getData(DataType.HEART_RATE_BPM)
             .filter { it.value > 0 }
@@ -168,40 +185,55 @@ object HealthCollector {
             history.addHeartRate(t, bpm)
         }
         heartRates.lastOrNull()?.let { (t, bpm) -> LiveHealth.onHeartRate(context, t, bpm) }
-        if (steps.isNotEmpty()) LiveHealth.onActivity(context, lastMove = steps.last().second)
+        if (steps.isNotEmpty()) LiveHealth.onActivity(context, lastMove = steps.last().to)
     }
 
-    /** One stretch of a daily total: from, to, amount added. */
-    private fun recordDailyDelta(
-        context: Context,
-        type: String,
-        totals: List<Pair<Long, Double>>
-    ): List<Triple<Long, Long, Double>> {
-        if (totals.isEmpty()) return emptyList()
-        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val added = mutableListOf<Triple<Long, Long, Double>>()
-        for ((time, total) in totals.sortedBy { it.first }) {
-            val day = dayOf(time)
-            val lastDay = prefs.getLong("$type.day", -1)
-            val lastTime = prefs.getLong("$type.time", -1)
-            val lastTotal = prefs.getFloat("$type.total", 0f).toDouble()
+    /** The last daily total seen for [type]. */
+    private fun loadTotal(prefs: SharedPreferences, type: String): DailyTotals.State? {
+        val time = prefs.getLong("$type.time", -1)
+        if (time < 0) return null
+        // Saved before the start was kept: totals were keyed on their day, so that day's midnight
+        val start = prefs.getLong("$type.start", startOfDay(time))
+        return DailyTotals.State(start, time, prefs.getFloat("$type.total", 0f).toDouble())
+    }
 
-            val (from, delta) = if (day != lastDay || lastTime < 0) {
-                // First reading of the day: count from midnight
-                startOfDay(time) to total
-            } else {
-                lastTime to total - lastTotal
-            }
-            if (delta > 0 && time > from) added += Triple(from, time, delta)
-            if (day != lastDay || total >= lastTotal) {
-                prefs.edit()
-                    .putLong("$type.day", day)
-                    .putLong("$type.time", time)
-                    .putFloat("$type.total", total.toFloat())
-                    .apply()
+    private fun saveTotal(edit: SharedPreferences.Editor, type: String, state: DailyTotals.State) {
+        edit.putLong("$type.start", state.start)
+            .putLong("$type.time", state.time)
+            .putFloat("$type.total", state.total.toFloat())
+            // Still read by seedToday
+            .putLong("$type.day", dayOf(state.start + DailyTotals.SAME_PERIOD_SLACK_MS))
+    }
+
+    /**
+     * How far the wall clock jumped since the last batch on this boot (time or date set by hand).
+     * Health Services times points from boot, so after a jump the same point converts to a
+     * different wall-clock time; saved times are moved by as much so the two still compare.
+     * A timezone change needs nothing: instants don't move with the zone.
+     */
+    private fun followClockJump(context: Context, prefs: SharedPreferences, boot: Instant) {
+        val bootMs = boot.toEpochMilli()
+        val bootId = bootId(context, bootMs)
+        val shift = if (prefs.getLong("clock.bootId", Long.MIN_VALUE) == bootId) {
+            bootMs - prefs.getLong("clock.boot", bootMs)
+        } else 0L
+        val edit = prefs.edit().putLong("clock.bootId", bootId).putLong("clock.boot", bootMs)
+        // Below this it's ordinary drift (network time nudging the clock), covered by the slack
+        if (abs(shift) > CLOCK_JUMP_MS) {
+            Log.i(TAG, "Clock moved ${shift / 1000} s, moving saved totals with it")
+            for (type in DAILY_TYPES) {
+                val state = loadTotal(prefs, type) ?: continue
+                saveTotal(edit, type, state.copy(start = state.start + shift, time = state.time + shift))
             }
         }
-        return added
+        // apply() updates what prefs reads at once; the disk write follows in the background
+        edit.apply()
+    }
+
+    /** Tells one boot from the next: the system's boot count, else the boot time to 10 minutes. */
+    private fun bootId(context: Context, bootMs: Long): Long {
+        val count = Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT, -1)
+        return if (count >= 0) count.toLong() else -(bootMs / (10 * 60_000L)) - 1
     }
 
     /**
