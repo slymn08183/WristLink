@@ -36,6 +36,8 @@ object HealthMetrics {
     private const val RESTLESS_STEPS = 20.0
 
     private const val PREFS = "health_metrics"
+    /** A new key: the old "includesBasal" could have been locked in from a partial day. */
+    private const val KEY_BASAL = "basalVerdict"
 
     data class Day(
         val start: Long,
@@ -116,22 +118,42 @@ object HealthMetrics {
 
     /**
      * Health Services' daily calories may or may not include the resting burn depending on the
-     * watch. Decide once from a full day's total against the BMR, then remember it.
+     * watch: a total at or above most of the BMR for the time elapsed does. The saved verdict
+     * comes only from Health Services' own running total (see [activePart]); history can miss
+     * part of the day and would make a total that includes the resting burn look like it
+     * doesn't. Until there is one, this guesses from [dayTotal] without saving anything.
      */
     private fun includesBasal(context: Context, dayTotal: Double, elapsedFraction: Double): Boolean {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        if (prefs.contains("includesBasal")) return prefs.getBoolean("includesBasal", true)
-        val bmr = HealthProfile.current(context).bmrPerDay * elapsedFraction
-        val includes = dayTotal >= bmr * 0.8
-        // Only trust it once enough of the day has gone by
-        if (elapsedFraction >= 0.5) prefs.edit().putBoolean("includesBasal", includes).apply()
-        return includes
+        if (prefs.contains(KEY_BASAL)) return prefs.getBoolean(KEY_BASAL, true)
+        return looksBasal(context, dayTotal, elapsedFraction)
     }
 
-    /** The active part of [delta] kcal recorded over [from]..[to]. */
-    fun activePart(context: Context, from: Long, to: Long, delta: Double, dayTotal: Double): Double {
-        val dayStart = startOfDay(to)
-        val fraction = ((to - dayStart).toDouble() / DAY_MS).coerceIn(0.01, 1.0)
+    private fun looksBasal(context: Context, dayTotal: Double, elapsedFraction: Double): Boolean =
+        dayTotal >= HealthProfile.current(context).bmrPerDay * elapsedFraction * 0.8
+
+    /**
+     * Judge [includesBasal] again from Health Services' running total. Only once three quarters
+     * of the day are over, so a busy morning on a watch that reports active energy alone doesn't
+     * pass for the resting burn; and every day rather than once, so one odd day (or a profile
+     * fixed later) doesn't decide forever. The latest verdict wins.
+     */
+    private fun learnIncludesBasal(context: Context, dayTotal: Double, elapsedFraction: Double) {
+        if (elapsedFraction < 0.75) return
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val includes = looksBasal(context, dayTotal, elapsedFraction)
+        if (!prefs.contains(KEY_BASAL) || prefs.getBoolean(KEY_BASAL, true) != includes) {
+            prefs.edit().putBoolean(KEY_BASAL, includes).remove("includesBasal").apply()
+        }
+    }
+
+    /**
+     * The active part of [delta] kcal recorded over [from]..[to]. [dayTotal] is Health Services'
+     * running total that delta came from, counted since [periodStart].
+     */
+    fun activePart(context: Context, from: Long, to: Long, delta: Double, dayTotal: Double, periodStart: Long = startOfDay(to)): Double {
+        val fraction = ((to - periodStart).toDouble() / DAY_MS).coerceIn(0.01, 1.0)
+        learnIncludesBasal(context, dayTotal, fraction)
         if (!includesBasal(context, dayTotal, fraction)) return delta
         val bmr = HealthProfile.current(context).bmrPerDay * (to - from) / DAY_MS
         return (delta - bmr).coerceAtLeast(0.0)
@@ -203,7 +225,7 @@ object HealthMetrics {
             exerciseMinutes = exerciseMinuteSet.size,
             raisedHrMinutes = raised,
             activeHours = activeHours,
-            restingHr = restingHr(minutes),
+            restingHr = restingHr(minutes, asleep(context, dayStart, dayEnd, now)),
             hrMin = hourlyMin.filterNotNull().minOrNull(),
             hrMax = hourlyMax.filterNotNull().maxOrNull(),
             hourlySteps = hourlySteps,
@@ -212,17 +234,30 @@ object HealthMetrics {
         )
     }
 
-    fun restingHr(context: Context, dayStart: Long): Int? =
-        restingHr(HealthHistory.get(context).minutes(dayStart, dayStart + DAY_MS))
+    fun restingHr(context: Context, dayStart: Long, now: Long = System.currentTimeMillis()): Int? =
+        restingHr(
+            HealthHistory.get(context).minutes(dayStart, dayStart + DAY_MS),
+            asleep(context, dayStart, dayStart + DAY_MS, now)
+        )
+
+    /** Asleep stretches overlapping [from, to), the one going on now included. */
+    private fun asleep(context: Context, from: Long, to: Long, now: Long): List<Pair<Long, Long>> {
+        val stretches = HealthHistory.get(context).sleep(from, to).map { it.start to it.end }
+        val ongoing = HealthCollector.asleepSince(context)?.takeIf { it < minOf(now, to) }?.let { it to now }
+        return if (ongoing != null) stretches + ongoing else stretches
+    }
 
     /**
      * Samsung measures resting heart rate with its own sensors; we take the low end (5th
-     * percentile) of minutes spent still: no steps in the minute or the two before it.
+     * percentile) of minutes spent still and awake: no steps in the minute or the two before it,
+     * and not inside [asleep]. Sleeping heart rate runs 5–10 bpm below resting and would
+     * otherwise be what the low end picks.
      */
-    private fun restingHr(minutes: List<HealthHistory.Minute>): Int? {
+    private fun restingHr(minutes: List<HealthHistory.Minute>, asleep: List<Pair<Long, Long>>): Int? {
         val steps = minutes.associate { it.t to it.steps }
         val still = minutes.mapNotNull { m ->
             val hr = m.hrAvg ?: return@mapNotNull null
+            if (asleep.any { (start, end) -> m.t + MINUTE_MS > start && m.t < end }) return@mapNotNull null
             val quiet = (0..2).all { (steps[m.t - it * MINUTE_MS] ?: 0.0) < 1.0 }
             if (quiet) hr else null
         }.sorted()

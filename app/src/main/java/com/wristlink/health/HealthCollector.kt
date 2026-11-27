@@ -164,7 +164,7 @@ object HealthCollector {
         // Apple Health wants active energy; Health Services' total includes the resting burn
         daily(HealthStore.CALORIES, "calories", points.getData(DataType.CALORIES_DAILY), outbox = false).forEach { d ->
             // The total this delta came from, not the batch's largest: a batch can straddle midnight
-            val active = HealthMetrics.activePart(context, d.from, d.to, d.amount, dayTotal = d.total)
+            val active = HealthMetrics.activePart(context, d.from, d.to, d.amount, dayTotal = d.total, periodStart = d.periodStart)
             if (active > 0.5 && !workingOut) store.add(HealthStore.ACTIVE_CALORIES, d.from, d.to, active)
         }
         edit.apply()
