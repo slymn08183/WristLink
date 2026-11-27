@@ -29,6 +29,7 @@ object LinkStats {
     private const val TAG = "LinkStats"
     private const val FILE_NAME = "link_log.csv"
     private const val MAX_LINES = 3000
+    private const val TRIM_TO_LINES = MAX_LINES * 4 / 5
     private const val WINDOW_MS = 24 * 60 * 60 * 1000L
 
     /** A delay this large means a clock is off or the event wasn't a fresh notification. */
@@ -152,9 +153,13 @@ object LinkStats {
         }
     }
 
+    /**
+     * Once the log overflows, cut it back to [TRIM_TO_LINES] in one go, so the file is rewritten
+     * once per few hundred events instead of on every one.
+     */
     private fun trimIfNeeded() {
         if (events.size <= MAX_LINES) return
-        repeat(events.size - MAX_LINES) { events.removeAt(0) }
+        events.subList(0, events.size - TRIM_TO_LINES).clear()
         rewriteFile()
     }
 
