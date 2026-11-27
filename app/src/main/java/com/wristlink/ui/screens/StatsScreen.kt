@@ -11,9 +11,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.foundation.lazy.AutoCenteringParams
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
@@ -25,6 +29,7 @@ import androidx.wear.compose.material.Text
 import com.wristlink.diagnostics.LinkStats
 import com.wristlink.ui.components.WristLinkScaffold
 import com.wristlink.ui.theme.SurfaceCard
+import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
 /** How the link to the iPhone has been doing over the last 24 hours. */
@@ -35,6 +40,14 @@ fun StatsScreen() {
 
     // Uptime keeps growing while the screen is open; recount when it opens
     LaunchedEffect(Unit) { LinkStats.refresh() }
+
+    var confirmReset by remember { mutableStateOf(false) }
+    LaunchedEffect(confirmReset) {
+        if (confirmReset) {
+            delay(3000)
+            confirmReset = false
+        }
+    }
 
     WristLinkScaffold(listState = listState) {
         ScalingLazyColumn(
@@ -99,11 +112,25 @@ fun StatsScreen() {
                 }
             }
 
+            // Asks for a second tap, like deleting a workout: a day of stats can't be brought back
             item {
                 Chip(
-                    onClick = { LinkStats.reset() },
-                    label = { Text("Reset", maxLines = 1) },
-                    secondaryLabel = { Text("Start counting again", maxLines = 1) },
+                    onClick = {
+                        if (confirmReset) {
+                            confirmReset = false
+                            LinkStats.reset()
+                        } else {
+                            confirmReset = true
+                        }
+                    },
+                    label = { Text(if (confirmReset) "Tap again to reset" else "Reset", maxLines = 1) },
+                    secondaryLabel = {
+                        Text(
+                            if (confirmReset) "Clears these numbers" else "Start counting again",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    },
                     colors = ChipDefaults.outlinedChipColors(),
                     border = ChipDefaults.outlinedChipBorder(),
                     modifier = Modifier.fillMaxWidth()

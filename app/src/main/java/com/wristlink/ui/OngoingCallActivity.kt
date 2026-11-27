@@ -17,6 +17,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.material.Button
 import androidx.wear.compose.material.ButtonDefaults
@@ -30,8 +31,16 @@ import kotlinx.coroutines.delay
 
 class OngoingCallActivity : ComponentActivity() {
 
+    companion object {
+        /** Wall-clock time (ms) the call started, so the timer doesn't restart with the screen. */
+        const val EXTRA_CALL_START = "call_start"
+    }
+
     private var callUid: Int = -1
-    private var callerName: String = "Active Call"
+
+    // State, not plain vars: onNewIntent (another call) must redraw the screen
+    private var callerName by mutableStateOf("Active Call")
+    private var callStart by mutableLongStateOf(0L)
 
     private val callDismissedReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -42,10 +51,17 @@ class OngoingCallActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         readExtras(intent)
+        // Registered for the screen's whole life: a call ending while it sleeps must close it
+        registerReceiver(
+            callDismissedReceiver,
+            IntentFilter("com.wristlink.CALL_DISMISSED"),
+            RECEIVER_NOT_EXPORTED
+        )
         setContent {
             WristLinkTheme {
                 OngoingCallScreen(
                     callerName = callerName,
+                    callStart = callStart,
                     onHangUp = { performAction(AncsConstants.ACTION_NEGATIVE) }
                 )
             }
@@ -57,23 +73,16 @@ class OngoingCallActivity : ComponentActivity() {
         readExtras(intent)
     }
 
-    override fun onResume() {
-        super.onResume()
-        registerReceiver(
-            callDismissedReceiver,
-            IntentFilter("com.wristlink.CALL_DISMISSED"),
-            RECEIVER_NOT_EXPORTED
-        )
-    }
-
-    override fun onPause() {
-        super.onPause()
+    override fun onDestroy() {
         unregisterReceiver(callDismissedReceiver)
+        super.onDestroy()
     }
 
     private fun readExtras(intent: Intent) {
         callUid = intent.getIntExtra("call_uid", -1)
         callerName = intent.getStringExtra("caller_name") ?: "Active Call"
+        // Older launches without the extra count from now, as before
+        callStart = intent.getLongExtra(EXTRA_CALL_START, 0L).takeIf { it > 0 } ?: System.currentTimeMillis()
     }
 
     private fun performAction(actionId: Byte) {
@@ -91,20 +100,24 @@ class OngoingCallActivity : ComponentActivity() {
 @Composable
 private fun OngoingCallScreen(
     callerName: String,
+    callStart: Long,
     onHangUp: () -> Unit
 ) {
-    var elapsedSeconds by remember { mutableIntStateOf(0) }
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
     LaunchedEffect(Unit) {
         while (true) {
-            delay(1000)
-            elapsedSeconds++
+            now = System.currentTimeMillis()
+            delay(1000 - now % 1000)
         }
     }
 
-    val minutes = elapsedSeconds / 60
-    val seconds = elapsedSeconds % 60
-    val timerText = "%d:%02d".format(minutes, seconds)
+    val elapsedSeconds = ((now - callStart) / 1000).coerceAtLeast(0)
+    val timerText = if (elapsedSeconds >= 3600) {
+        "%d:%02d:%02d".format(elapsedSeconds / 3600, elapsedSeconds % 3600 / 60, elapsedSeconds % 60)
+    } else {
+        "%d:%02d".format(elapsedSeconds / 60, elapsedSeconds % 60)
+    }
 
     Box(
         modifier = Modifier.fillMaxSize(),
@@ -112,12 +125,15 @@ private fun OngoingCallScreen(
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(horizontal = 24.dp)
         ) {
             Text(
                 text = callerName,
-                style = MaterialTheme.typography.title2,
-                textAlign = TextAlign.Center
+                style = callerNameStyle(callerName),
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
             )
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -135,7 +151,7 @@ private fun OngoingCallScreen(
                     modifier = Modifier.padding(start = 8.dp)
                 )
             }
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(8.dp))
             // Hang up button (red)
             Button(
                 onClick = onHangUp,

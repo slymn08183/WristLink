@@ -165,7 +165,8 @@ fun HourlyBars(values: DoubleArray, modifier: Modifier, color: Color = StepsColo
     }
 }
 
-private fun weekdayLetter(dayStart: Long): String {
+/** First letter of the weekday, for week rows (Today's goals, Sleep's nights). */
+internal fun weekdayLetter(dayStart: Long): String {
     val c = Calendar.getInstance().apply { timeInMillis = dayStart }
     return c.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.SHORT, java.util.Locale.getDefault())?.take(1) ?: ""
 }

@@ -41,6 +41,9 @@ class CallNotificationHandler(
     /** Pending "the watch's phone app never rang" fallback for the current call. */
     private var watchRingFallback: Runnable? = null
 
+    /** The active call's UID and when it was first seen, so a re-shown call keeps its start. */
+    private var activeCallStart: Pair<UInt, Long>? = null
+
     private val notificationManager =
         context.getSystemService(NotificationManager::class.java)
 
@@ -159,12 +162,16 @@ class CallNotificationHandler(
 
         val hangUpIntent = createCallActionIntent(event.notificationUid, AncsConstants.ACTION_NEGATIVE)
 
+        val callStart = activeCallStart?.takeIf { it.first == event.notificationUid }?.second
+            ?: System.currentTimeMillis().also { activeCallStart = event.notificationUid to it }
+
         val fullScreenPendingIntent = PendingIntent.getActivity(
             context, ACTIVE_CALL_NOTIF_ID,
             Intent(context, OngoingCallActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 putExtra("call_uid", event.notificationUid.toInt())
                 putExtra("caller_name", callerName)
+                putExtra(OngoingCallActivity.EXTRA_CALL_START, callStart)
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )

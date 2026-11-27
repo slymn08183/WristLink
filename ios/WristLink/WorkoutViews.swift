@@ -248,6 +248,17 @@ struct WorkoutDetailView: View {
     @State private var analysis: WorkoutAnalysis?
     @State private var loaded = false
 
+    // Table columns grow with the text size; at accessibility sizes the rows stack instead
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .subheadline) private var kmColumn: CGFloat = 36
+    @ScaledMetric(relativeTo: .subheadline) private var bpmColumn: CGFloat = 50
+    @ScaledMetric(relativeTo: .subheadline) private var elevColumn: CGFloat = 56
+    @ScaledMetric(relativeTo: .subheadline) private var lapColumn: CGFloat = 28
+    @ScaledMetric(relativeTo: .subheadline) private var lapValueColumn: CGFloat = 70
+    @ScaledMetric(relativeTo: .caption) private var bandLabelColumn: CGFloat = 46
+    @ScaledMetric(relativeTo: .caption) private var bandTimeColumn: CGFloat = 52
+    @ScaledMetric(relativeTo: .caption) private var bandDistanceColumn: CGFloat = 60
+
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
@@ -324,19 +335,8 @@ struct WorkoutDetailView: View {
             if !seconds.isEmpty {
                 VStack(spacing: 6) {
                     ForEach(0..<min(labels.count, seconds.count), id: \.self) { i in
-                        HStack(spacing: 8) {
-                            Text(labels[i]).font(.caption).foregroundStyle(.secondary).frame(width: 46, alignment: .leading)
-                            GeometryReader { geo in
-                                Capsule().fill(Color.secondary.opacity(0.15))
-                                    .overlay(alignment: .leading) {
-                                        Capsule().fill(colors[i]).frame(width: geo.size.width * seconds[i] / total)
-                                    }
-                            }
-                            .frame(height: 8)
-                            Text(Format.elapsed(seconds[i])).font(.caption.monospacedDigit()).frame(width: 52, alignment: .trailing)
-                            Text(i < meters.count ? Format.distance(meters[i]) : "").font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary).frame(width: 60, alignment: .trailing)
-                        }
+                        bandRow(label: labels[i], color: colors[i], seconds: seconds[i],
+                                meters: i < meters.count ? meters[i] : nil, share: seconds[i] / total)
                     }
                 }
             }
@@ -344,6 +344,39 @@ struct WorkoutDetailView: View {
                 .font(.caption2).foregroundStyle(.secondary)
         }
         .card()
+    }
+
+    /// One speed band: label, bar, time and distance in a row, or the numbers over the bar at
+    /// accessibility text sizes (the fixed columns left the bar no room).
+    @ViewBuilder private func bandRow(label: String, color: Color, seconds: Double, meters: Double?, share: Double) -> some View {
+        let bar = GeometryReader { geo in
+            Capsule().fill(Color.secondary.opacity(0.15))
+                .overlay(alignment: .leading) {
+                    Capsule().fill(color).frame(width: geo.size.width * share)
+                }
+        }
+        .frame(height: 8)
+        let distance = meters.map(Format.distance) ?? ""
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(label).foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(Format.elapsed(seconds)) · \(distance)").monospacedDigit()
+                }
+                .font(.caption)
+                bar
+            }
+        } else {
+            HStack(spacing: 8) {
+                Text(label).font(.caption).foregroundStyle(.secondary).frame(width: bandLabelColumn, alignment: .leading)
+                bar
+                Text(Format.elapsed(seconds)).font(.caption.monospacedDigit()).frame(width: bandTimeColumn, alignment: .trailing)
+                Text(distance).font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary).frame(width: bandDistanceColumn, alignment: .trailing)
+            }
+            .lineLimit(1)
+        }
     }
 
     private var summaryCard: some View {
@@ -390,6 +423,13 @@ struct WorkoutDetailView: View {
         let high = values.max() ?? 1
         let padding = max(1, (high - low) * 0.1)
         let average = values.isEmpty ? 0 : values.reduce(0, +) / Double(values.count)
+        // Pace is better when lower, so faster goes up: it's plotted negated (Charts has no
+        // reversed explicit domain) and the axis labels undo the sign and read m'ss"
+        let isPace = unit == "min/km"
+        let sign: Double = isPace ? -1 : 1
+        let domain: ClosedRange<Double> = isPace
+            ? (-(high + padding))...(-(low - padding))
+            : (low - padding)...(high + padding)
         let detail: String
         switch unit {
         case "min/km": detail = "avg \(Format.pace(secondsPerKm: average * 60))"
@@ -402,47 +442,79 @@ struct WorkoutDetailView: View {
                 if area {
                     AreaMark(
                         x: .value("Minutes", sample.minutes),
-                        yStart: .value("Base", low - padding),
-                        yEnd: .value(title, sample.value)
+                        yStart: .value("Base", domain.lowerBound),
+                        yEnd: .value(title, sample.value * sign)
                     )
                     .foregroundStyle(color.opacity(0.25))
                 }
                 LineMark(
                     x: .value("Minutes", sample.minutes),
-                    y: .value(title, sample.value)
+                    y: .value(title, sample.value * sign)
                 )
                 .foregroundStyle(color)
                 .interpolationMethod(.catmullRom)
             }
-            .chartYScale(domain: (low - padding)...(high + padding))
+            .chartYScale(domain: domain)
+            .chartYAxis {
+                AxisMarks { value in
+                    AxisGridLine()
+                    AxisTick()
+                    AxisValueLabel { Text(Self.axisLabel(value, pace: isPace)) }
+                }
+            }
             .chartXAxisLabel("minutes")
             .frame(height: 150)
         }
         .card()
     }
 
+    /// A y-axis label: m'ss" for pace (stored negated, see chartCard), else the plain number.
+    private static func axisLabel(_ value: AxisValue, pace: Bool) -> String {
+        guard let number = value.as(Double.self) else { return "" }
+        if pace { return Format.paceShort(minutes: -number) }
+        return number.formatted(.number.precision(.fractionLength(0...1)))
+    }
+
     private func splitsCard(_ splits: [WorkoutAnalysis.Split]) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let stacked = dynamicTypeSize.isAccessibilitySize
+        return VStack(alignment: .leading, spacing: 10) {
             CardHeader(title: "Splits", icon: "flag.fill", color: .blue)
-            HStack {
-                Text("km").frame(width: 36, alignment: .leading)
-                Text(record.kind.showsSpeed ? "speed" : "pace").frame(maxWidth: .infinity, alignment: .leading)
-                Text("bpm").frame(width: 50, alignment: .trailing)
-                Text("elev").frame(width: 56, alignment: .trailing)
-            }
-            .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            ForEach(splits) { split in
+            if !stacked {
                 HStack {
-                    Text(split.distance >= 999 ? "\(split.number)" : String(format: "%.2f", Double(split.number - 1) + split.distance / 1000))
-                        .frame(width: 36, alignment: .leading)
-                    Text(splitPace(split)).frame(maxWidth: .infinity, alignment: .leading)
-                    Text(split.heartRate.map { "\(Int($0.rounded()))" } ?? "–").frame(width: 50, alignment: .trailing)
-                    Text(split.elevation.map { String(format: "%+.0f m", $0) } ?? "–").frame(width: 56, alignment: .trailing)
+                    Text("km").frame(width: kmColumn, alignment: .leading)
+                    Text(record.kind.showsSpeed ? "speed" : "pace").frame(maxWidth: .infinity, alignment: .leading)
+                    Text("bpm").frame(width: bpmColumn, alignment: .trailing)
+                    Text("elev").frame(width: elevColumn, alignment: .trailing)
                 }
-                .font(.subheadline.monospacedDigit())
+                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            }
+            ForEach(splits) { split in
+                splitRow(split, stacked: stacked)
             }
         }
         .card()
+    }
+
+    /// One split: a table row, or two lines at accessibility text sizes where columns don't fit.
+    @ViewBuilder private func splitRow(_ split: WorkoutAnalysis.Split, stacked: Bool) -> some View {
+        let km = split.distance >= 999 ? "\(split.number)" : String(format: "%.2f", Double(split.number - 1) + split.distance / 1000)
+        let bpm = split.heartRate.map { "\(Int($0.rounded()))" } ?? "–"
+        let elevation = split.elevation.map { String(format: "%+.0f m", $0) } ?? "–"
+        if stacked {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("km \(km) · \(splitPace(split))").font(.subheadline.monospacedDigit().weight(.semibold))
+                Text("\(bpm) bpm · \(elevation)").font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
+            }
+        } else {
+            HStack {
+                Text(km).frame(width: kmColumn, alignment: .leading)
+                Text(splitPace(split)).frame(maxWidth: .infinity, alignment: .leading)
+                Text(bpm).frame(width: bpmColumn, alignment: .trailing)
+                Text(elevation).frame(width: elevColumn, alignment: .trailing)
+            }
+            .font(.subheadline.monospacedDigit())
+            .lineLimit(1)
+        }
     }
 
     private func splitPace(_ split: WorkoutAnalysis.Split) -> String {
@@ -459,16 +531,31 @@ struct WorkoutDetailView: View {
             VStack(alignment: .leading, spacing: 10) {
                 CardHeader(title: "Laps", icon: "repeat", color: .teal)
                 ForEach(Array(laps.enumerated()), id: \.offset) { index, lap in
-                    HStack {
-                        Text("\(lap.n ?? index + 1)").frame(width: 28, alignment: .leading)
-                        Text(lap.d.map(Format.distance) ?? "–").frame(maxWidth: .infinity, alignment: .leading)
-                        Text(lapTime(lap)).frame(width: 70, alignment: .trailing)
-                        Text(lap.hr.map { "\(Int($0.rounded())) bpm" } ?? "–").frame(width: 70, alignment: .trailing)
-                    }
-                    .font(.subheadline.monospacedDigit())
+                    lapRow(lap, number: lap.n ?? index + 1)
                 }
             }
             .card()
+        }
+    }
+
+    /// One lap: a table row, or two lines at accessibility text sizes.
+    @ViewBuilder private func lapRow(_ lap: WorkoutRecord.Lap, number: Int) -> some View {
+        let distance = lap.d.map(Format.distance) ?? "–"
+        let heartRate = lap.hr.map { "\(Int($0.rounded())) bpm" } ?? "–"
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Lap \(number) · \(lapTime(lap))").font(.subheadline.monospacedDigit().weight(.semibold))
+                Text("\(distance) · \(heartRate)").font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
+            }
+        } else {
+            HStack {
+                Text("\(number)").frame(width: lapColumn, alignment: .leading)
+                Text(distance).frame(maxWidth: .infinity, alignment: .leading)
+                Text(lapTime(lap)).frame(width: lapValueColumn, alignment: .trailing)
+                Text(heartRate).frame(width: lapValueColumn, alignment: .trailing)
+            }
+            .font(.subheadline.monospacedDigit())
+            .lineLimit(1)
         }
     }
 

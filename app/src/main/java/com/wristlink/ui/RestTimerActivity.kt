@@ -79,7 +79,8 @@ private fun RestTimerScreen(onKeepScreenOn: (Boolean) -> Unit) {
 
     var running by remember { mutableStateOf(RestTimer.isRunning(context)) }
     var remainingMs by remember { mutableLongStateOf(RestTimer.remainingMs(context)) }
-    var totalMs by remember { mutableLongStateOf(remainingMs) }
+    // The stored full length: reopened mid-countdown, the ring continues where it was
+    var totalMs by remember { mutableLongStateOf(maxOf(RestTimer.totalMs(context), remainingMs)) }
 
     // Tick while running; the screen staying on is what makes the countdown glanceable
     LaunchedEffect(running) {
@@ -109,7 +110,7 @@ private fun RestTimerScreen(onKeepScreenOn: (Boolean) -> Unit) {
                     CompactChip(
                         onClick = {
                             RestTimer.extend(context, 15)
-                            totalMs += 15_000
+                            totalMs = RestTimer.totalMs(context)
                             remainingMs = RestTimer.remainingMs(context)
                         },
                         label = { Text("+15s") },

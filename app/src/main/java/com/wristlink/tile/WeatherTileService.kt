@@ -120,14 +120,16 @@ class WeatherTileService : TileService() {
             .addContent(text(summary, Typography.TYPOGRAPHY_CAPTION1, COLOR_DETAIL))
             .addContent(spacer(height = 6f))
             .addContent(hoursRow(forecast, at))
-            .addContent(spacer(height = 6f))
-            .addContent(sunRow(forecast, at))
-            .build()
+        // At large font sizes the sunrise/sunset row would be cut by the bottom of the circle
+        if (!isLargeFont(device)) {
+            content.addContent(spacer(height = 6f))
+                .addContent(sunRow(forecast, at))
+        }
 
         return PrimaryLayout.Builder(device)
             .setResponsiveContentInsetEnabled(true)
             .setPrimaryLabelTextContent(text(forecast.place ?: "Weather", Typography.TYPOGRAPHY_CAPTION1, COLOR_PRIMARY))
-            .setContent(content)
+            .setContent(content.build())
             .build()
     }
 

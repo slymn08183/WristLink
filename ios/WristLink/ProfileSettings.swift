@@ -3,10 +3,13 @@ import SwiftUI
 /// The watch's body profile and goals (protocol 6). Each change goes to the watch as
 /// `setSetting` with key `profile.<field>`; the watch clamps it to its own limits and answers with
 /// the full settings, which this form then shows.
+///
+/// The ranges and steps are the watch's own Profile screen's (ProfileScreen.kt), so a value set
+/// here can also be reached there and isn't clamped to something else on arrival.
 struct ProfileSettingsView: View {
     @EnvironmentObject private var link: WatchLink
 
-    private static let sleepGoals = Array(stride(from: 240, through: 720, by: 30))
+    private static let sleepGoals = Array(stride(from: 300, through: 660, by: 15))
 
     var body: some View {
         Form {
@@ -16,7 +19,11 @@ struct ProfileSettingsView: View {
                 }
             }
             if let profile = link.settings?.profile {
-                sections(profile)
+                // Changes go to the watch: wait for it while it's away
+                Group {
+                    sections(profile)
+                }
+                .disabled(link.state != .connected)
             } else {
                 Section {
                     Text("Reading the profile from the watch…").foregroundStyle(.secondary)
@@ -44,8 +51,8 @@ struct ProfileSettingsView: View {
             } label: {
                 Label("Birth year", systemImage: "birthday.cake")
             }
-            stepper("Height", "ruler", \.heightCm, "heightCm", p, range: 100...250, step: 1, unit: "cm")
-            stepper("Weight", "scalemass", \.weightKg, "weightKg", p, range: 30...250, step: 1, unit: "kg")
+            stepper("Height", "ruler", \.heightCm, "heightCm", p, range: 120...220, step: 1, unit: "cm")
+            stepper("Weight", "scalemass", \.weightKg, "weightKg", p, range: 35...200, step: 1, unit: "kg")
         } header: {
             Text("Body")
         } footer: {
@@ -53,9 +60,9 @@ struct ProfileSettingsView: View {
         }
 
         Section {
-            stepper("Steps", "figure.walk", \.stepGoal, "stepGoal", p, range: 1000...50000, step: 500, unit: "")
-            stepper("Active time", "timer", \.activeMinutesGoal, "activeMinutesGoal", p, range: 10...600, step: 5, unit: "min")
-            stepper("Active calories", "flame", \.activeCaloriesGoal, "activeCaloriesGoal", p, range: 50...3000, step: 25, unit: "kcal")
+            stepper("Steps", "figure.walk", \.stepGoal, "stepGoal", p, range: 1000...30000, step: 500, unit: "")
+            stepper("Active time", "timer", \.activeMinutesGoal, "activeMinutesGoal", p, range: 10...300, step: 5, unit: "min")
+            stepper("Active calories", "flame", \.activeCaloriesGoal, "activeCaloriesGoal", p, range: 100...2000, step: 50, unit: "kcal")
         } header: {
             Text("Daily goals")
         } footer: {
@@ -136,8 +143,9 @@ struct ProfileSettingsView: View {
     }
 
     private static func birthYears(current: Int) -> [Int] {
-        let thisYear = Calendar.current.component(.year, from: Date())
-        return options(Array((1920...(thisYear - 5)).reversed()), current: current).sorted(by: >)
+        // The watch's picker runs 1930–2020
+        let last = min(2020, Calendar.current.component(.year, from: Date()) - 5)
+        return options(Array((1930...last).reversed()), current: current).sorted(by: >)
     }
 
     /// The choices, plus whatever the watch is set to now if it isn't one of them.

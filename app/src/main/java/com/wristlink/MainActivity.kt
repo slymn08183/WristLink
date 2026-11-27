@@ -12,6 +12,7 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -146,7 +147,9 @@ class MainActivity : ComponentActivity() {
                         StatsScreen()
                     }
                     composable("media") {
-                        NowPlayingScreen(media = WristLinkService.mediaManager)
+                        // Collected so a screen opened while the service starts gets its media
+                        val bridge by WristLinkService.bridge.collectAsState()
+                        NowPlayingScreen(media = bridge?.media)
                     }
                 }
             }

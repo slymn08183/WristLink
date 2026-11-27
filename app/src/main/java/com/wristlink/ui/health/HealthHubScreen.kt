@@ -117,6 +117,8 @@ fun HealthHubScreen(onOpen: (String) -> Unit, onWorkout: () -> Unit) {
                 HubChip(
                     label = "Sleep",
                     detail = when {
+                        // Still reading the history: "no sleep" would be a false claim
+                        data == null -> "Loading…"
                         night == null -> "No sleep recorded last night"
                         night.ongoing -> "Sleeping since ${formatClock(context, night.start)}"
                         else -> formatDuration(night.asleepMs) + (night.score?.let { " · score $it" } ?: "")

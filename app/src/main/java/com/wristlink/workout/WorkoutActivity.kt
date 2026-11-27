@@ -74,6 +74,7 @@ class WorkoutActivity : ComponentActivity() {
 
     private var ambient by mutableStateOf(false)
     private var ambientTick by mutableLongStateOf(0L)
+    private var burnInProtection by mutableStateOf(false)
 
     private var afterPermissions: (() -> Unit)? = null
     private val permissionLauncher = registerForActivityResult(
@@ -86,6 +87,7 @@ class WorkoutActivity : ComponentActivity() {
 
     private val ambientCallback = object : AmbientLifecycleObserver.AmbientLifecycleCallback {
         override fun onEnterAmbient(ambientDetails: AmbientLifecycleObserver.AmbientDetails) {
+            burnInProtection = ambientDetails.burnInProtectionRequired
             ambient = true
             ambientTick = System.currentTimeMillis()
         }
@@ -108,6 +110,7 @@ class WorkoutActivity : ComponentActivity() {
                 WorkoutApp(
                     ambient = ambient,
                     ambientTick = ambientTick,
+                    burnInProtection = burnInProtection,
                     withPermissions = ::withPermissions,
                     onLeave = { moveTaskToBack(true) }
                 )
@@ -140,6 +143,7 @@ class WorkoutActivity : ComponentActivity() {
 private fun WorkoutApp(
     ambient: Boolean,
     ambientTick: Long,
+    burnInProtection: Boolean,
     withPermissions: (WorkoutType, () -> Unit) -> Unit,
     onLeave: () -> Unit
 ) {
@@ -152,9 +156,15 @@ private fun WorkoutApp(
     }
 
     if (live.inProgress) {
-        if (ambient) AmbientWorkoutScreen(live, ambientTick) else LiveWorkoutPager(live, onLeave)
+        if (ambient) AmbientWorkoutScreen(live, ambientTick, burnInProtection) else LiveWorkoutPager(live, onLeave)
     } else {
-        WorkoutMenu(live, withPermissions)
+        Box(Modifier.fillMaxSize()) {
+            // Stays composed under the cover: removing it would end a warm-up in progress
+            WorkoutMenu(live, withPermissions)
+            // The ambient observer keeps this activity on Always On for the live screens; the
+            // menu, warm-up and summary would otherwise stay lit in full color there
+            if (ambient) AmbientIdleScreen(live, ambientTick, burnInProtection)
+        }
     }
 }
 

@@ -6,9 +6,19 @@ import UIKit
 /// Three tabs: the watch at a glance, Apple Health, and the watch's settings.
 struct ContentView: View {
     @EnvironmentObject private var link: WatchLink
+    /// WatchLink's remembered watch (its private `savedWatchKey`); AppStorage redraws this view
+    /// when WatchLink sets or clears it.
+    @AppStorage("watchIdentifier") private var savedWatch: String?
+
+    /// Once a watch has been chosen the tabs stay, connected or not: a Bluetooth drop used to
+    /// throw the user back to the connect screen, away from the Health and workout history kept
+    /// on this iPhone. Only the first-time setup (no watch chosen yet) shows the connect screen.
+    private var showTabs: Bool {
+        link.state == .connected || (savedWatch != nil && link.state != .choosing)
+    }
 
     var body: some View {
-        if link.state == .connected {
+        if showTabs {
             TabView {
                 WatchTab()
                     .tabItem { Label("Watch", systemImage: "applewatch") }
@@ -19,6 +29,86 @@ struct ContentView: View {
             }
         } else {
             ConnectView()
+        }
+    }
+}
+
+// MARK: - Connection banner
+
+/// A compact line at the top of each tab while the watch isn't connected.
+private struct ConnectionBanner: View {
+    @EnvironmentObject private var link: WatchLink
+
+    var body: some View {
+        if link.state != .connected {
+            HStack(spacing: 8) {
+                if trying {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                }
+                Text(text).font(.footnote.weight(.semibold)).lineLimit(2)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(.regularMaterial, in: .rect(cornerRadius: 14))
+            .padding(.horizontal)
+            .padding(.top, 4)
+        }
+    }
+
+    private var trying: Bool { link.state == .connecting || link.state == .starting }
+
+    private var text: String {
+        switch link.state {
+        case .starting, .connecting: return "Reconnecting to \(link.watchName ?? "the watch")…"
+        case .bluetoothOff: return "Not connected: Bluetooth is off"
+        case .notAllowed: return "Not connected: Bluetooth isn't allowed for WristLink"
+        case .noCompanionService: return "Not connected: open WristLink on the watch"
+        case .choosing, .connected: return "Not connected"
+        }
+    }
+}
+
+private extension View {
+    /// Pins the connection banner under the navigation bar.
+    func connectionBanner() -> some View {
+        safeAreaInset(edge: .top, spacing: 0) { ConnectionBanner() }
+    }
+}
+
+/// A spinner while the watch should be answering; a message instead once it's clearly not going
+/// to (after a while, or with no connection at all), so it never spins forever.
+private struct WatchWait: View {
+    let waiting: String
+    let gaveUp: String
+    let connected: Bool
+    var footnote: String? = nil
+
+    @State private var timedOut = false
+
+    var body: some View {
+        VStack(spacing: 12) {
+            if connected && !timedOut {
+                ProgressView()
+                Text(waiting).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            } else {
+                Image(systemName: connected ? "exclamationmark.triangle" : "antenna.radiowaves.left.and.right.slash")
+                    .font(.title2).foregroundStyle(.secondary)
+                Text(connected ? gaveUp : "Not connected to the watch. This fills in once it's back.")
+                    .foregroundStyle(.secondary).multilineTextAlignment(.center)
+            }
+            if let footnote {
+                Text(footnote).font(.footnote).foregroundStyle(.tertiary).multilineTextAlignment(.center)
+            }
+        }
+        .padding()
+        .task(id: connected) {
+            timedOut = false
+            guard connected else { return }
+            try? await Task.sleep(for: .seconds(15))
+            if !Task.isCancelled { timedOut = true }
         }
     }
 }
@@ -111,14 +201,19 @@ private struct WatchTab: View {
                         todayGrid(info)
                         connectionCard(info)
                     } else {
-                        ProgressView().padding(.top, 80)
+                        WatchWait(waiting: "Reading the watch…",
+                                  gaveUp: "The watch isn't answering. Pull down to try again, or open WristLink on the watch.",
+                                  connected: link.state == .connected)
+                            .padding(.top, 60)
                     }
                     if let settings = link.settings {
                         quickToggles(settings)
+                            .disabled(link.state != .connected)
                     }
                 }
                 .padding()
             }
+            .connectionBanner()
             .background(Theme.background)
             .navigationTitle(link.watchName ?? "Watch")
             .refreshable {
@@ -143,7 +238,7 @@ private struct WatchTab: View {
             .frame(width: 80, height: 80)
 
             VStack(alignment: .leading, spacing: 6) {
-                ConnectedPill()
+                ConnectedPill(connected: link.state == .connected)
                 Text(info.model.map { "Galaxy Watch · \($0)" } ?? "Galaxy Watch")
                     .font(.headline)
                 Text(info.charging ? "Charging · \(info.battery)%" : "Battery \(info.battery)%")
@@ -357,7 +452,8 @@ private struct HealthTab: View {
                                     settingsProfile: link.settings?.profile,
                                     latestHeartRate: link.info?.hr)
                     SyncCard(sync: link.health, workouts: link.workouts, pending: link.info?.pending,
-                             workoutsPending: link.protocolVersion >= 6 ? link.info?.workoutsPending : nil) {
+                             workoutsPending: link.protocolVersion >= 6 ? link.info?.workoutsPending : nil,
+                             connected: link.state == .connected) {
                         link.syncHealth()
                     }
                     stepsChart
@@ -365,6 +461,7 @@ private struct HealthTab: View {
                 }
                 .padding()
             }
+            .connectionBanner()
             .background(Theme.background)
             .navigationTitle("Health")
             .refreshable {
@@ -450,6 +547,8 @@ private struct SyncCard: View {
     let pending: Int?
     /// Nil for a watch without workouts (protocol 5 and older).
     let workoutsPending: Int?
+    /// Syncing needs the watch; the rest of the card is what's kept here.
+    let connected: Bool
     let onSync: () -> Void
 
     private var busy: Bool { sync.syncing || workouts.syncing }
@@ -479,10 +578,10 @@ private struct SyncCard: View {
                     .font(.footnote).foregroundStyle(.orange)
             }
             Button(action: onSync) {
-                Text(busy ? "Syncing…" : "Sync now").frame(maxWidth: .infinity)
+                Text(busy ? "Syncing…" : connected ? "Sync now" : "Sync when connected").frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(busy)
+            .disabled(busy || !connected)
         }
         .card()
     }
@@ -492,6 +591,9 @@ private struct SyncCard: View {
 
 private struct SettingsTab: View {
     @EnvironmentObject private var link: WatchLink
+
+    /// "Use a different watch" forgets the watch: asked first.
+    @State private var confirmForget = false
 
     private static let timeouts = [5, 10, 15, 30, 60, 120, 300]
     private static let fontScales: [Double] = [0.85, 1.0, 1.15, 1.3]
@@ -511,16 +613,21 @@ private struct SettingsTab: View {
                 if let settings = link.settings {
                     form(settings)
                 } else {
-                    VStack(spacing: 12) {
-                        ProgressView()
-                        Text("Reading settings from the watch…").foregroundStyle(.secondary)
-                        Text("Needs WristLink 0.1 with protocol 3 or later on the watch.")
-                            .font(.footnote).foregroundStyle(.tertiary)
+                    // In a scroll view so pull to refresh can ask again once it has given up
+                    ScrollView {
+                        WatchWait(waiting: "Reading settings from the watch…",
+                                  gaveUp: "The watch didn't send its settings. Pull down to try again.",
+                                  connected: link.state == .connected,
+                                  footnote: "Needs WristLink 0.1 with protocol 3 or later on the watch.")
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 80)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Theme.background)
+                    .refreshable { link.refreshSettings() }
                 }
             }
+            .connectionBanner()
+            .background(Theme.background)
             .navigationTitle("Watch settings")
         }
     }
@@ -533,153 +640,177 @@ private struct SettingsTab: View {
                 }
             }
 
-            // Names and descriptions match the watch's own settings screen
-            Section {
-                toggle("Vibration", "iphone.radiowaves.left.and.right", \.vibration, "vibration", s,
-                       detail: "For notifications. Calls always buzz")
-                toggle("Hide during DND", "moon", \.respectDnd, "respectDnd", s,
-                       detail: "While the watch is on Do Not Disturb, only calls show")
-                toggle("Show older notifications", "clock.arrow.circlepath", \.showPreExisting, "showPreExisting", s,
-                       detail: "Include ones from before connecting")
-                toggle("Show silent notifications", "bell.slash", \.showSilent, "showSilent", s,
-                       detail: "Ones iOS delivers without a sound")
-                NavigationLink {
-                    CategoriesView()
-                } label: {
-                    Label("Categories", systemImage: "square.grid.2x2")
-                }
-            } header: {
-                Text("Notifications")
+            // Everything that changes the watch waits for it; the weather (an iPhone setting) and
+            // About stay usable while it's away
+            Group {
+                watchSections(s)
             }
-
-            Section {
-                toggle("Calls on watch", "phone.fill", \.callsOnWatch, "callsOnWatch", s,
-                       detail: "Talk through the watch", enabled: s.canTalkOnWatch != false)
-            } header: {
-                Text("Calls")
-            } footer: {
-                Text(s.canTalkOnWatch == false
-                     ? "Allow phone access on the watch first: open WristLink there, Settings, Calls on watch."
-                     : "Call audio goes to the watch when it's connected as the iPhone's Bluetooth audio.")
-            }
-
-            Section {
-                toggle("Battery alert", "battery.25", \.phoneBatteryAlert, "phoneBatteryAlert", s,
-                       detail: "Buzz when the iPhone is below 20%")
-                toggle("Disconnect alert", "iphone.slash", \.disconnectAlert, "disconnectAlert", s,
-                       detail: "Buzz when the iPhone is gone for a minute")
-                toggle("Phone info on tile", "rectangle.on.rectangle", \.showPhoneInfo, "showPhoneInfo", s,
-                       detail: "Name and battery on the tile")
-            } header: {
-                Text("iPhone")
-            }
-
-            Section {
-                toggle("Quiet while asleep", "bed.double", \.sleepGuard, "sleepGuard", s,
-                       detail: "DND and no wrist wake while you sleep")
-            } header: {
-                Text("Sleep")
-            } footer: {
-                Text(sleepFooter(s))
-            }
-
-            if link.protocolVersion >= 6 {
-                Section {
-                    NavigationLink {
-                        ProfileSettingsView()
-                    } label: {
-                        Label {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Body, goals and alerts")
-                                if let p = s.profile {
-                                    Text("\(p.isFemale ? "Female" : "Male") · \(p.age) · \(p.heightCm) cm · \(p.weightKg) kg · \(Format.number(Double(p.stepGoal))) steps")
-                                        .font(.footnote).foregroundStyle(.secondary)
-                                }
-                            }
-                        } icon: {
-                            Image(systemName: "person.crop.circle")
-                        }
-                    }
-                } header: {
-                    Text("Profile & goals")
-                } footer: {
-                    if s.profile?.configured == false {
-                        Text("Set these once: calories, heart-rate zones and your resting range depend on them.")
-                    }
-                }
-            }
+            .disabled(link.state != .connected)
 
             WeatherSection(weather: link.weather)
 
-            Section {
-                toggle("Auto brightness", "sun.max", \.autoBrightness, "autoBrightness", s, enabled: s.canChangeSystem)
-                if !s.autoBrightness {
-                    BrightnessSlider(value: s.brightness) { link.set(\.brightness, key: "brightness", to: $0) }
-                        .disabled(!s.canChangeSystem)
-                }
-                toggle("Always On Display", "circle.lefthalf.filled", \.alwaysOnDisplay, "alwaysOnDisplay", s, enabled: s.canChangeSystem)
-                if s.alwaysOnDisplay {
-                    toggle("Tilt to brighten", "arrow.up.and.down.circle", \.tiltToWakeAod, "tiltToWakeAod", s, enabled: s.canChangeSystem)
-                }
-                Picker(selection: Binding(get: { s.fontScale },
-                                          set: { link.set(\.fontScale, key: "fontScale", to: $0) })) {
-                    ForEach(Self.options(Self.fontScales, current: s.fontScale), id: \.self) { Text(Format.fontScale($0)).tag($0) }
-                } label: {
-                    Label("Font size", systemImage: "textformat.size")
-                }
-                .disabled(!s.canChangeSystem)
-            } header: {
-                Text("Display")
+            Group {
+                systemSections(s)
             }
-
-            Section {
-                toggle("Raise to wake", "hand.raised", \.raiseToWake, "raiseToWake", s, enabled: s.canChangeSystem)
-                toggle("Turn bezel to wake", "dial.low", \.wakeByBezel, "wakeByBezel", s, enabled: s.canChangeSystem)
-                toggle("Double tap to wake", "hand.tap", \.doubleTapToWake, "doubleTapToWake", s, enabled: s.canChangeSystem)
-                toggle("Touch sensitivity (gloves)", "hand.point.up", \.touchSensitivity, "touchSensitivity", s, enabled: s.canChangeSystem)
-                toggle("Touch vibration", "waveform", \.hapticFeedback, "hapticFeedback", s, enabled: s.canChangeSystem)
-            } header: {
-                Text("Wake & touch")
-            }
-
-            Section {
-                toggle("Do Not Disturb", "moon.fill", \.doNotDisturb, "doNotDisturb", s, enabled: s.canChangeDnd)
-                Picker(selection: Binding(get: { s.screenTimeoutSec },
-                                          set: { link.set(\.screenTimeoutSec, key: "screenTimeoutSec", to: $0) })) {
-                    ForEach(Self.options(Self.timeouts, current: s.screenTimeoutSec), id: \.self) { Text(Format.timeout($0)).tag($0) }
-                } label: {
-                    Label("Screen timeout", systemImage: "timer")
-                }
-                .disabled(!s.canChangeSystem)
-                toggle("24-hour time", "clock", \.use24Hour, "use24Hour", s, enabled: s.canChangeSystem)
-                toggle("Hide status icons", "eye.slash", \.hideStatusIcons, "hideStatusIcons", s, enabled: s.canChangeSystem)
-            } header: {
-                Text("Watch")
-            } footer: {
-                if !s.canChangeSystem {
-                    Text("Run the WristLink installer once to allow changing these from the iPhone.")
-                } else {
-                    Text("Hide status icons removes the \"Disconnected from phone\" icon Samsung shows on the watch face.")
-                }
-            }
-
-            Section {
-                toggle("Status notification", "pin", \.statusNotification, "statusNotification", s)
-            } header: {
-                Text("Advanced")
-            } footer: {
-                Text("Keeps the connection service in the foreground. Off hides its notification but Android may pause it more often.")
-            }
+            .disabled(link.state != .connected)
 
             Section {
                 if let app = link.info?.app { LabeledContent("Watch app", value: Self.readableVersion(app)) }
                 LabeledContent("iPhone app", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "–")
-                Button("Use a different watch", role: .destructive) { link.forgetWatch() }
+                Button("Use a different watch", role: .destructive) { confirmForget = true }
+                    .confirmationDialog("Use a different watch?", isPresented: $confirmForget, titleVisibility: .visible) {
+                        Button("Forget \(link.watchName ?? "this watch")", role: .destructive) { link.forgetWatch() }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("WristLink stops connecting to this watch and asks which one to use. Health data and workouts kept on this iPhone stay.")
+                    }
             } header: {
                 Text("About")
             }
         }
         .refreshable { link.refreshSettings() }
+    }
+
+    /// Notifications, calls, iPhone, sleep and profile.
+    @ViewBuilder private func watchSections(_ s: WatchSettings) -> some View {
+        // Names and descriptions match the watch's own settings screen
+        Section {
+            toggle("Vibration", "iphone.radiowaves.left.and.right", \.vibration, "vibration", s,
+                   detail: "For notifications. Calls always buzz")
+            toggle("Hide during DND", "moon", \.respectDnd, "respectDnd", s,
+                   detail: "While the watch is on Do Not Disturb, only calls show")
+            toggle("Show older notifications", "clock.arrow.circlepath", \.showPreExisting, "showPreExisting", s,
+                   detail: "Include ones from before connecting")
+            toggle("Show silent notifications", "bell.slash", \.showSilent, "showSilent", s,
+                   detail: "Ones iOS delivers without a sound")
+            NavigationLink {
+                CategoriesView()
+            } label: {
+                Label("Categories", systemImage: "square.grid.2x2")
+            }
+        } header: {
+            Text("Notifications")
+        }
+
+        Section {
+            toggle("Calls on watch", "phone.fill", \.callsOnWatch, "callsOnWatch", s,
+                   detail: "Talk through the watch", enabled: s.canTalkOnWatch != false)
+        } header: {
+            Text("Calls")
+        } footer: {
+            Text(s.canTalkOnWatch == false
+                 ? "Allow phone access on the watch first: open WristLink there, Settings, Calls on watch."
+                 : "Call audio goes to the watch when it's connected as the iPhone's Bluetooth audio.")
+        }
+
+        Section {
+            toggle("Battery alert", "battery.25", \.phoneBatteryAlert, "phoneBatteryAlert", s,
+                   detail: "Buzz when the iPhone is below 20%")
+            toggle("Disconnect alert", "iphone.slash", \.disconnectAlert, "disconnectAlert", s,
+                   detail: "Buzz when the iPhone is gone for a minute")
+            toggle("Phone info on tile", "rectangle.on.rectangle", \.showPhoneInfo, "showPhoneInfo", s,
+                   detail: "Name and battery on the tile")
+        } header: {
+            Text("iPhone")
+        }
+
+        Section {
+            toggle("Quiet while asleep", "bed.double", \.sleepGuard, "sleepGuard", s,
+                   detail: "DND and no wrist wake while you sleep")
+        } header: {
+            Text("Sleep")
+        } footer: {
+            Text(sleepFooter(s))
+        }
+
+        if link.protocolVersion >= 6 {
+            Section {
+                NavigationLink {
+                    ProfileSettingsView()
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Body, goals and alerts")
+                            if let p = s.profile {
+                                Text("\(p.isFemale ? "Female" : "Male") · \(p.age) · \(p.heightCm) cm · \(p.weightKg) kg · \(Format.number(Double(p.stepGoal))) steps")
+                                    .font(.footnote).foregroundStyle(.secondary)
+                            }
+                        }
+                    } icon: {
+                        Image(systemName: "person.crop.circle")
+                    }
+                }
+            } header: {
+                Text("Profile & goals")
+            } footer: {
+                if s.profile?.configured == false {
+                    Text("Set these once: calories, heart-rate zones and your resting range depend on them.")
+                }
+            }
+        }
+    }
+
+    /// Display, wake & touch, watch and advanced.
+    @ViewBuilder private func systemSections(_ s: WatchSettings) -> some View {
+        Section {
+            toggle("Auto brightness", "sun.max", \.autoBrightness, "autoBrightness", s, enabled: s.canChangeSystem)
+            if !s.autoBrightness {
+                BrightnessSlider(value: s.brightness) { link.set(\.brightness, key: "brightness", to: $0) }
+                    .disabled(!s.canChangeSystem)
+            }
+            toggle("Always On Display", "circle.lefthalf.filled", \.alwaysOnDisplay, "alwaysOnDisplay", s, enabled: s.canChangeSystem)
+            if s.alwaysOnDisplay {
+                toggle("Tilt to brighten", "arrow.up.and.down.circle", \.tiltToWakeAod, "tiltToWakeAod", s, enabled: s.canChangeSystem)
+            }
+            Picker(selection: Binding(get: { s.fontScale },
+                                      set: { link.set(\.fontScale, key: "fontScale", to: $0) })) {
+                ForEach(Self.options(Self.fontScales, current: s.fontScale), id: \.self) { Text(Format.fontScale($0)).tag($0) }
+            } label: {
+                Label("Font size", systemImage: "textformat.size")
+            }
+            .disabled(!s.canChangeSystem)
+        } header: {
+            Text("Display")
+        }
+
+        Section {
+            toggle("Raise to wake", "hand.raised", \.raiseToWake, "raiseToWake", s, enabled: s.canChangeSystem)
+            toggle("Turn bezel to wake", "dial.low", \.wakeByBezel, "wakeByBezel", s, enabled: s.canChangeSystem)
+            toggle("Double tap to wake", "hand.tap", \.doubleTapToWake, "doubleTapToWake", s, enabled: s.canChangeSystem)
+            toggle("Touch sensitivity (gloves)", "hand.point.up", \.touchSensitivity, "touchSensitivity", s, enabled: s.canChangeSystem)
+            toggle("Touch vibration", "waveform", \.hapticFeedback, "hapticFeedback", s, enabled: s.canChangeSystem)
+        } header: {
+            Text("Wake & touch")
+        }
+
+        Section {
+            toggle("Do Not Disturb", "moon.fill", \.doNotDisturb, "doNotDisturb", s, enabled: s.canChangeDnd)
+            Picker(selection: Binding(get: { s.screenTimeoutSec },
+                                      set: { link.set(\.screenTimeoutSec, key: "screenTimeoutSec", to: $0) })) {
+                ForEach(Self.options(Self.timeouts, current: s.screenTimeoutSec), id: \.self) { Text(Format.timeout($0)).tag($0) }
+            } label: {
+                Label("Screen timeout", systemImage: "timer")
+            }
+            .disabled(!s.canChangeSystem)
+            toggle("24-hour time", "clock", \.use24Hour, "use24Hour", s, enabled: s.canChangeSystem)
+            toggle("Hide status icons", "eye.slash", \.hideStatusIcons, "hideStatusIcons", s, enabled: s.canChangeSystem)
+        } header: {
+            Text("Watch")
+        } footer: {
+            if !s.canChangeSystem {
+                Text("Run the WristLink installer once to allow changing these from the iPhone.")
+            } else {
+                Text("Hide status icons removes the \"Disconnected from phone\" icon Samsung shows on the watch face.")
+            }
+        }
+
+        Section {
+            toggle("Status notification", "pin", \.statusNotification, "statusNotification", s)
+        } header: {
+            Text("Advanced")
+        } footer: {
+            Text("Keeps the connection service in the foreground. Off hides its notification but Android may pause it more often.")
+        }
     }
 
     private func toggle(_ title: String, _ icon: String, _ keyPath: WritableKeyPath<WatchSettings, Bool>,
@@ -775,16 +906,21 @@ extension View {
     }
 }
 
+/// "Connected", or "Not connected" while the numbers next to it are the ones from before a drop.
 private struct ConnectedPill: View {
+    let connected: Bool
+
     var body: some View {
         HStack(spacing: 6) {
-            Circle().fill(.green).frame(width: 8, height: 8)
-            Text("Connected").font(.caption.weight(.semibold))
+            Circle().fill(color).frame(width: 8, height: 8)
+            Text(connected ? "Connected" : "Not connected").font(.caption.weight(.semibold))
         }
         .padding(.horizontal, 10).padding(.vertical, 4)
-        .background(.green.opacity(0.15), in: .capsule)
-        .foregroundStyle(.green)
+        .background(color.opacity(0.15), in: .capsule)
+        .foregroundStyle(color)
     }
+
+    private var color: Color { connected ? .green : .secondary }
 }
 
 private struct StatTile: View {
@@ -874,6 +1010,13 @@ enum Format {
         guard secondsPerKm.isFinite, secondsPerKm > 0 else { return "–" }
         let seconds = Int(secondsPerKm.rounded())
         return String(format: "%ld'%02ld\" /km", seconds / 60, seconds % 60)
+    }
+
+    /// A pace in minutes per km (a chart axis value), "5'30\"", without the unit.
+    static func paceShort(minutes: Double) -> String {
+        guard minutes.isFinite, minutes > 0 else { return "" }
+        let seconds = Int((minutes * 60).rounded())
+        return String(format: "%ld'%02ld\"", seconds / 60, seconds % 60)
     }
 
     /// "1:02:15", or "32:05" under an hour.

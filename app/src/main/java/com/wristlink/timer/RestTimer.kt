@@ -33,6 +33,9 @@ object RestTimer {
     /** The last duration that was started, so "Repeat" knows what to repeat. */
     private const val KEY_LAST_DURATION = "last_duration_s"
 
+    /** The running timer's full length including "+15s"s (ms), for the progress ring. */
+    private const val KEY_TOTAL_MS = "total_ms"
+
     const val DEFAULT_DURATION_S = 90
     val PRESETS_S = listOf(60, 90, 120, 180)
 
@@ -43,6 +46,7 @@ object RestTimer {
         prefs(context).edit()
             .putLong(KEY_END_TIME, endTime)
             .putInt(KEY_LAST_DURATION, durationSeconds)
+            .putLong(KEY_TOTAL_MS, durationSeconds * 1000L)
             .apply()
         scheduleAlarm(context, endTime)
         RestTimerTileService.requestUpdate(context)
@@ -53,7 +57,10 @@ object RestTimer {
         val endTime = endTime(context)
         if (endTime == 0L) return
         val newEnd = maxOf(endTime, System.currentTimeMillis()) + bySeconds * 1000L
-        prefs(context).edit().putLong(KEY_END_TIME, newEnd).apply()
+        prefs(context).edit()
+            .putLong(KEY_END_TIME, newEnd)
+            .putLong(KEY_TOTAL_MS, totalMs(context) + bySeconds * 1000L)
+            .apply()
         scheduleAlarm(context, newEnd)
         RestTimerTileService.requestUpdate(context)
     }
@@ -77,6 +84,14 @@ object RestTimer {
         if (endTime == 0L) return 0
         return (endTime - System.currentTimeMillis()).coerceAtLeast(0)
     }
+
+    /**
+     * The running timer's full length (ms), so a screen opened mid-countdown draws the ring
+     * against it rather than against what's left. Falls back to what's left for a timer
+     * started before this was stored.
+     */
+    fun totalMs(context: Context): Long =
+        prefs(context).getLong(KEY_TOTAL_MS, 0L).takeIf { it > 0 } ?: remainingMs(context)
 
     fun lastDurationSeconds(context: Context): Int =
         prefs(context).getInt(KEY_LAST_DURATION, DEFAULT_DURATION_S)

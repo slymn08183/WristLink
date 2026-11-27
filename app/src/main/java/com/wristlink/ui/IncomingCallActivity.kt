@@ -17,11 +17,15 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.material.Button
 import androidx.wear.compose.material.ButtonDefaults
@@ -36,7 +40,9 @@ import com.wristlink.ui.theme.WristLinkTheme
 class IncomingCallActivity : ComponentActivity() {
 
     private var callUid: Int = -1
-    private var callerName: String = "Unknown Caller"
+
+    // State, not a plain var: a waiting call arrives through onNewIntent and must redraw
+    private var callerName by mutableStateOf("Unknown Caller")
 
     private val callDismissedReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -47,6 +53,13 @@ class IncomingCallActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         readExtras(intent)
+        // For the whole life of the screen, not just while resumed: if it sleeps while ringing,
+        // the end of the call must still close it
+        registerReceiver(
+            callDismissedReceiver,
+            IntentFilter("com.wristlink.CALL_DISMISSED"),
+            RECEIVER_NOT_EXPORTED
+        )
         setContent {
             WristLinkTheme {
                 IncomingCallScreen(
@@ -67,18 +80,9 @@ class IncomingCallActivity : ComponentActivity() {
         readExtras(intent)
     }
 
-    override fun onResume() {
-        super.onResume()
-        registerReceiver(
-            callDismissedReceiver,
-            IntentFilter("com.wristlink.CALL_DISMISSED"),
-            RECEIVER_NOT_EXPORTED
-        )
-    }
-
-    override fun onPause() {
-        super.onPause()
+    override fun onDestroy() {
         unregisterReceiver(callDismissedReceiver)
+        super.onDestroy()
     }
 
     private fun readExtras(intent: Intent) {
@@ -97,6 +101,14 @@ class IncomingCallActivity : ComponentActivity() {
         finish()
     }
 }
+
+/** Names longer than this get the smaller style, so two lines still leave room for the buttons. */
+private const val LONG_NAME = 14
+
+/** The caller's name, at most two lines, smaller when long, so it never pushes buttons off the round screen. */
+@Composable
+internal fun callerNameStyle(name: String): TextStyle =
+    if (name.length > LONG_NAME) MaterialTheme.typography.title3 else MaterialTheme.typography.title2
 
 @Composable
 private fun IncomingCallScreen(
@@ -121,7 +133,8 @@ private fun IncomingCallScreen(
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.padding(horizontal = 24.dp)
         ) {
             Text(
                 text = "Incoming Call",
@@ -136,15 +149,17 @@ private fun IncomingCallScreen(
                         color = MaterialTheme.colors.primary.copy(alpha = ringAlpha),
                         shape = CircleShape
                     )
-                    .padding(12.dp)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
                 Text(
                     text = callerName,
-                    style = MaterialTheme.typography.title2,
-                    textAlign = TextAlign.Center
+                    style = callerNameStyle(callerName),
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(2.dp))
             Row(
                 horizontalArrangement = Arrangement.spacedBy(24.dp)
             ) {
