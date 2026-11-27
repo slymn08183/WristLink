@@ -138,7 +138,8 @@ struct HealthDashboard: View {
                           week: Array((summary.latest?.days ?? []).suffix(7)),
                           streak: summary.latest?.streak.map { Int($0) },
                           collecting: collecting,
-                          staleNote: stale)
+                          staleNote: stale,
+                          rings: numbers.fromWatch ? summary.latest?.today?.rings : nil)
             }
             .buttonStyle(.plain)
             NavigationLink {
@@ -304,8 +305,51 @@ private struct TodayCard: View {
     let collecting: Bool
     /// "Updated … ago" when the watch's numbers are old.
     var staleNote: String? = nil
+    /// The watch's own three rings for today (each one's metric is picked on the watch), when
+    /// the numbers are the watch's. Without them: steps, active time and active calories.
+    var rings: [HealthSummary.Day.Ring]? = nil
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    private struct RingSpec {
+        let color: Color
+        let icon: String
+        let title: String
+        let value: Double?
+        let goal: Int
+        let unit: String
+    }
+
+    private var specs: [RingSpec] {
+        let colors: [Color] = [.green, .cyan, .pink]
+        if let rings, rings.count == 3 {
+            return rings.enumerated().map { index, ring in
+                RingSpec(color: colors[index], icon: Self.icon(for: ring.label), title: ring.label ?? "–",
+                         value: ring.value, goal: Int(ring.goal ?? 0),
+                         unit: ring.unit == "steps" || ring.unit == "floors" ? "" : (ring.unit ?? ""))
+            }
+        }
+        return [
+            RingSpec(color: .green, icon: "figure.walk", title: "Steps",
+                     value: numbers.steps, goal: profile.stepGoal, unit: ""),
+            RingSpec(color: .cyan, icon: "timer", title: "Active time",
+                     value: numbers.activeMinutes, goal: profile.activeMinutesGoal, unit: "min"),
+            RingSpec(color: .pink, icon: "flame", title: "Active calories",
+                     value: numbers.activeCalories, goal: profile.activeCaloriesGoal, unit: "kcal")
+        ]
+    }
+
+    private static func icon(for label: String?) -> String {
+        switch label {
+        case "Floors": return "figure.stairs"
+        case "Active hours": return "clock"
+        case "Exercise time": return "figure.run"
+        case "Raised HR time": return "heart"
+        case "Active calories", "Exercise calories": return "flame"
+        case "Active time": return "timer"
+        default: return "figure.walk"
+        }
+    }
 
     private var source: String? {
         guard numbers.hasAny else { return nil }
@@ -320,11 +364,8 @@ private struct TodayCard: View {
                 HStack {
                     Spacer()
                     ZStack {
-                        ActivityRings(progress: [
-                            progress(numbers.steps, profile.stepGoal),
-                            progress(numbers.activeMinutes, profile.activeMinutesGoal),
-                            progress(numbers.activeCalories, profile.activeCaloriesGoal)
-                        ], colors: [.green, .cyan, .pink])
+                        ActivityRings(progress: specs.map { progress($0.value, $0.goal) },
+                                      colors: specs.map(\.color))
                         // The inner ring leaves ~84 pt: accessibility text sizes don't fit, and
                         // the steps row below has the same number
                         if !dynamicTypeSize.isAccessibilitySize {
@@ -335,12 +376,11 @@ private struct TodayCard: View {
                     Spacer()
                 }
                 VStack(spacing: 10) {
-                    RingRow(color: .green, icon: "figure.walk", title: "Steps",
-                            value: numbers.steps, goal: profile.stepGoal, unit: "")
-                    RingRow(color: .cyan, icon: "timer", title: "Active time",
-                            value: numbers.activeMinutes, goal: profile.activeMinutesGoal, unit: "min")
-                    RingRow(color: .pink, icon: "flame", title: "Active calories",
-                            value: numbers.activeCalories, goal: profile.activeCaloriesGoal, unit: "kcal")
+                    ForEach(specs.indices, id: \.self) { index in
+                        let spec = specs[index]
+                        RingRow(color: spec.color, icon: spec.icon, title: spec.title,
+                                value: spec.value, goal: spec.goal, unit: spec.unit)
+                    }
                 }
                 HStack {
                     Metric(value: numbers.distance.map(Format.distance) ?? "–", label: "distance")

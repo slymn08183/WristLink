@@ -74,7 +74,8 @@ Reply:
     "activeMinutes":38, "exerciseMinutes":0, "raisedHrMinutes":12, "activeHours":6,
     "restingHr":58, "hrMin":52, "hrMax":131,
     "stepGoalMet": false, "allGoalsMet": false,
-    "hourlySteps":[0,0,...24 values], "hourlyHrMin":[null,...24], "hourlyHrMax":[null,...24]}
+    "hourlySteps":[0,0,...24 values], "hourlyHrMin":[null,...24], "hourlyHrMax":[null,...24],
+    "rings":[{"label":"Steps","value":8123,"goal":8000,"unit":"steps"},{"label":"Exercise time",...},{...}]}
  ],
  "sleep": [
    {"night":"2026-11-03", "start":<ms>, "end":<ms>, "inBedMin":465, "asleepMin":432,

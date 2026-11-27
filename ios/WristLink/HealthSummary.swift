@@ -32,6 +32,18 @@ struct HealthSummary: Decodable {
         let hourlySteps: [Double?]?
         let hourlyHrMin: [Double?]?
         let hourlyHrMax: [Double?]?
+        /// The three rings as the watch shows them (move, time, energy; each one's metric is
+        /// picked on the watch). Missing from older watch versions.
+        let rings: [Ring]?
+
+        struct Ring: Codable {
+            /// "Steps", "Floors", "Active time", "Exercise calories", …
+            let label: String?
+            let value: Double?
+            let goal: Double?
+            /// "steps", "floors", "h", "min", "kcal".
+            let unit: String?
+        }
 
         var date: Date? { start.map(HealthSummary.date) }
     }

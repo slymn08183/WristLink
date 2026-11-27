@@ -66,7 +66,7 @@ struct ProfileSettingsView: View {
         } header: {
             Text("Daily goals")
         } footer: {
-            Text("The three rings on the watch and in the Health tab fill up toward these.")
+            Text("Goals for steps, active time and active calories. Which metric each of the three rings shows (floors, exercise time, …) is picked on the watch, and the Health tab follows it.")
         }
 
         Section {

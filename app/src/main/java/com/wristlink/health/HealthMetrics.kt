@@ -492,6 +492,11 @@ object HealthMetrics {
                     .put("hourlySteps", JSONArray(d.hourlySteps.map { it.roundToInt() }))
                     .put("hourlyHrMin", JSONArray(d.hourlyHrMin.map(::nullable)))
                     .put("hourlyHrMax", JSONArray(d.hourlyHrMax.map(::nullable)))
+                    // The rings as the watch shows them (each one's metric is picked in the
+                    // profile), so the iPhone draws the same three instead of its own guess
+                    .put("rings", JSONArray(Rings.of(d, profile).map { r ->
+                        JSONObject().put("label", r.label).put("value", r.value).put("goal", r.goal).put("unit", r.unit)
+                    }))
             }))
             .put("sleep", JSONArray(nights.takeLast(count).map { n ->
                 JSONObject()
