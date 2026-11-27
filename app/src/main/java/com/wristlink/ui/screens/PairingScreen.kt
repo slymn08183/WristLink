@@ -67,9 +67,10 @@ fun PairingScreen(
     val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     val adapter = bluetoothManager.adapter
 
-    val smState by (WristLinkService.stateMachine?.state
-        ?: kotlinx.coroutines.flow.MutableStateFlow(ConnectionStateMachine.State.IDLE))
-        .collectAsState()
+    // The service may only just be starting (Pair is often the first thing tapped)
+    val bridge by WristLinkService.bridge.collectAsState()
+    val noState = remember { kotlinx.coroutines.flow.MutableStateFlow(ConnectionStateMachine.State.IDLE) }
+    val smState by (bridge?.stateMachine?.state ?: noState).collectAsState()
 
     // Only phones: the system list also holds earbuds, TVs and the Android phone the watch was
     // set up with, none of which can be connected to like an iPhone

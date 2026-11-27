@@ -102,6 +102,21 @@ class WristLinkService : Service() {
             private set
         var isRunning: Boolean = false
             private set
+
+        /** The managers the UI needs, together; null while the service isn't up. */
+        class Bridge(
+            val stateMachine: ConnectionStateMachine,
+            val session: AncsSessionManager,
+            val media: AmsMediaManager
+        )
+
+        private val _bridge = kotlinx.coroutines.flow.MutableStateFlow<Bridge?>(null)
+
+        /**
+         * The vars above are read once by whoever looks; on a cold start the UI looks before
+         * the service has made them and would stay on "Not Connected". Collect this instead.
+         */
+        val bridge: kotlinx.coroutines.flow.StateFlow<Bridge?> = _bridge
     }
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -208,6 +223,7 @@ class WristLinkService : Service() {
         mediaManager = media
         albumArt = AlbumArt(this, media)
         advertiser = adv
+        _bridge.value = Bridge(sm, sessMgr, media)
 
         bondMgr.register()
         companionServer = CompanionGattServer(this).also { it.start() }
@@ -398,6 +414,7 @@ class WristLinkService : Service() {
         albumArt?.release()
         albumArt = null
         advertiser = null
+        _bridge.value = null
         isRunning = false
         ConnectionTileService.requestUpdate(this)
         MediaTileService.requestUpdate(this)

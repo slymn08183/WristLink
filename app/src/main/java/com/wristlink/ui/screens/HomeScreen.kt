@@ -21,7 +21,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,6 +44,7 @@ import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
 import com.wristlink.R
 import com.wristlink.ams.AmsMediaManager
+import com.wristlink.ancs.AncsSessionManager
 import com.wristlink.ble.BondManager
 import com.wristlink.ble.ConnectionStateMachine
 import com.wristlink.service.WristLinkService
@@ -52,6 +55,8 @@ import com.wristlink.ui.theme.StatusDisconnected
 import com.wristlink.ui.theme.StatusIdle
 import com.wristlink.ui.theme.SurfaceCard
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 
 @Composable
 fun HomeScreen(
@@ -62,14 +67,14 @@ fun HomeScreen(
     onTurnOnBluetooth: () -> Unit,
     onDisconnect: () -> Unit
 ) {
-    val sm = WristLinkService.stateMachine
-    val session = WristLinkService.sessionManager
+    // Collected, not read once: on a cold start the service makes these after Home is up
+    val bridge by WristLinkService.bridge.collectAsState()
     val noMedia = remember { MutableStateFlow(AmsMediaManager.MediaState()) }
-    val media by (WristLinkService.mediaManager?.state ?: noMedia).collectAsState()
+    val media by (bridge?.media?.state ?: noMedia).collectAsState()
 
-    val smState by (sm?.state
-        ?: kotlinx.coroutines.flow.MutableStateFlow(ConnectionStateMachine.State.IDLE))
-        .collectAsState()
+    val noState = remember { MutableStateFlow(ConnectionStateMachine.State.IDLE) }
+    val smState by (bridge?.stateMachine?.state ?: noState).collectAsState()
+    val activeCount by rememberActiveNotificationCount(bridge?.session)
 
     val listState = rememberScalingLazyListState()
 
@@ -93,7 +98,7 @@ fun HomeScreen(
 
             // Status card
             item {
-                StatusCard(smState = smState, activeCount = session?.getActiveUidCount() ?: 0)
+                StatusCard(smState = smState, activeCount = activeCount)
             }
 
             // Action button: only up top when something needs doing; Disconnect sits at the bottom
@@ -193,6 +198,22 @@ fun HomeScreen(
         }
     }
 }
+
+/**
+ * The session keeps its notification UIDs in a plain set, so recount whenever something that
+ * changes it happens: a notification event, a session state change, or a session reset.
+ */
+@Composable
+private fun rememberActiveNotificationCount(session: AncsSessionManager?): State<Int> =
+    produceState(initialValue = session?.getActiveUidCount() ?: 0, session) {
+        if (session == null) {
+            value = 0
+            return@produceState
+        }
+        value = session.getActiveUidCount()
+        merge(session.events.map { }, session.sessionState.map { }, session.eventLog.map { })
+            .collect { value = session.getActiveUidCount() }
+    }
 
 @Composable
 private fun StatusCard(smState: ConnectionStateMachine.State, activeCount: Int) {
