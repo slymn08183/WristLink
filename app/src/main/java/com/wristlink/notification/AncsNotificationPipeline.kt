@@ -15,7 +15,9 @@ import com.wristlink.diagnostics.LinkStats
 import com.wristlink.settings.SettingsManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -52,6 +54,11 @@ class AncsNotificationPipeline(
         /** Ask again if iOS hasn't answered an attribute request by then. */
         private const val ATTRIBUTE_TIMEOUT_MS = 4000L
         private const val MAX_ATTRIBUTE_RETRIES = 2
+
+        /** After a new session, when to drop what the iPhone no longer lists (see onSessionStart). */
+        private const val STALE_SWEEP_MIN_MS = 10_000L
+        private const val STALE_SWEEP_MAX_MS = 60_000L
+        private const val STALE_SWEEP_POLL_MS = 1_000L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -68,6 +75,15 @@ class AncsNotificationPipeline(
 
     /** Arrived while the iPhone was in use: seen there already, so never shown here. */
     private val seenOnPhone = ConcurrentHashMap.newKeySet<UInt>()
+
+    /**
+     * Pre-existing notifications that won't be shown, fetched only to match them with ones the
+     * watch still shows from an earlier session (NotificationRenderer.adoptStale).
+     */
+    private val matchOnly = ConcurrentHashMap.newKeySet<UInt>()
+
+    @Volatile
+    private var staleSweep: Job? = null
 
     private val notificationManager =
         context.getSystemService(NotificationManager::class.java)
@@ -86,11 +102,18 @@ class AncsNotificationPipeline(
             }
         }
 
-        NotificationActionReceiver.onAction = { uid, actionId ->
-            performAction(uid, actionId)
+        NotificationActionReceiver.onAction = { uid, actionId, session ->
+            performAction(uid, actionId, session)
         }
 
         Log.i(TAG, "Notification pipeline started")
+    }
+
+    /** The service is going away. */
+    fun stop() {
+        if (NotificationActionReceiver.onAction != null) NotificationActionReceiver.onAction = null
+        attributeRequestQueue.close()
+        scope.cancel()
     }
 
     fun handleDataSourceResponse(result: Any?) {
@@ -106,6 +129,7 @@ class AncsNotificationPipeline(
 
     private fun handleEvent(event: AncsNotificationEvent) {
         when {
+            event.isSessionStart -> onSessionStart(event.session)
             event.isAdded || event.isModified -> {
                 val heardAt = System.currentTimeMillis()
 
@@ -124,9 +148,18 @@ class AncsNotificationPipeline(
 
                 // Apply filters
                 if (!shouldShowNotification(event)) {
+                    if (event.isAdded && event.isPreExisting && renderer.hasStale()) {
+                        // Not shown, but maybe still on the watch from before: find out which
+                        matchOnly += uid
+                        pendingEvents[uid] = event
+                        awaitingAttributes[uid] = 0
+                        attributeRequestQueue.trySend(event)
+                        return
+                    }
                     Log.d(TAG, "Filtered out: uid=${event.notificationUid} cat=${event.categoryName}")
                     return
                 }
+                matchOnly.remove(uid)
 
                 // Only fresh notifications say anything about delay; pre-existing ones are old
                 // and a modified one keeps its original timestamp
@@ -141,6 +174,7 @@ class AncsNotificationPipeline(
                 attributeRequestQueue.trySend(event)
             }
             event.isRemoved -> {
+                matchOnly.remove(event.notificationUid)
                 if (seenOnPhone.remove(event.notificationUid)) return
                 pendingEvents.remove(event.notificationUid)
                 awaitingAttributes.remove(event.notificationUid)
@@ -211,6 +245,9 @@ class AncsNotificationPipeline(
                 Log.w(TAG, "No attributes for uid=$uid after ${ATTRIBUTE_TIMEOUT_MS}ms, retrying")
                 awaitingAttributes[uid] = retries + 1
                 attributeRequestQueue.trySend(event)
+            } else if (matchOnly.remove(uid)) {
+                awaitingAttributes.remove(uid)
+                pendingEvents.remove(uid, event)
             } else {
                 Log.e(TAG, "Giving up on attributes for uid=$uid")
                 awaitingAttributes.remove(uid)
@@ -238,6 +275,10 @@ class AncsNotificationPipeline(
         val event = pendingEvents[attrs.notificationUid]
         if (event == null) {
             Log.w(TAG, "Received attributes for unknown uid=${attrs.notificationUid}")
+            return
+        }
+        if (matchOnly.remove(attrs.notificationUid)) {
+            if (pendingEvents.remove(attrs.notificationUid, event)) renderer.adoptStale(event, attrs)
             return
         }
 
@@ -290,10 +331,44 @@ class AncsNotificationPipeline(
         }
     }
 
-    private fun performAction(notificationUid: UInt, actionId: Byte) {
+    private fun performAction(notificationUid: UInt, actionId: Byte, session: Int?) {
+        // A card from an earlier session: iOS may have given its UID to another notification
+        if (session != null && session != renderer.session) {
+            Log.i(TAG, "Ignored action $actionId on uid=$notificationUid from an earlier session")
+            return
+        }
         val command = AncsActionHandler.buildPerformAction(notificationUid, actionId)
         connectionManager.writeControlPoint(command)
         Log.i(TAG, "Performed action $actionId on uid=$notificationUid")
+    }
+
+    /**
+     * ANCS was subscribed again (AncsSessionManager.startNewSession): UIDs start over. What is
+     * still waiting belongs to the old numbering. Notifications on screen stay; the iPhone lists
+     * what it still has as pre-existing, those are matched back, and once that list is through
+     * the rest is removed (cleared on the iPhone meanwhile).
+     */
+    private fun onSessionStart(session: Int) {
+        pendingEvents.clear()
+        awaitingAttributes.clear()
+        announcedAt.clear()
+        seenOnPhone.clear()
+        matchOnly.clear()
+        staleSweep?.cancel()
+        val stale = renderer.startNewSession(session)
+        Log.i(TAG, "ANCS session $session${if (stale) ", matching notifications kept from before" else ""}")
+        if (!stale) return
+        staleSweep = scope.launch {
+            // Pre-existing ones come in a burst right after subscribing; then wait for their content
+            delay(STALE_SWEEP_MIN_MS)
+            var waited = STALE_SWEEP_MIN_MS
+            while (awaitingAttributes.isNotEmpty() && waited < STALE_SWEEP_MAX_MS) {
+                delay(STALE_SWEEP_POLL_MS)
+                waited += STALE_SWEEP_POLL_MS
+            }
+            // Only over a link that stayed up: a drop means the list may be incomplete
+            if (connectionManager.isReady) renderer.sweepStale(session)
+        }
     }
 
     /**
@@ -301,11 +376,14 @@ class AncsNotificationPipeline(
      * even while the iPhone is out of range. Only call screens go: their state is unknown now.
      */
     fun onDisconnected() {
+        // The iPhone's list may not have come through; matching goes on in the next session
+        staleSweep?.cancel()
         pendingEvents.clear()
         awaitingAttributes.clear()
         announcedAt.clear()
         // UIDs start over with the next session
         seenOnPhone.clear()
+        matchOnly.clear()
         callHandler.cancelIncomingCall()
         callHandler.cancelActiveCall()
     }

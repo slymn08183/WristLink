@@ -35,8 +35,12 @@ class NotificationRenderer(
 
     companion object {
         private const val TAG = "NotificationRenderer"
-        // Offset notification IDs to avoid collision with service notification (ID=1)
-        private const val NOTIFICATION_ID_OFFSET = 1000
+        /**
+         * Card IDs are handed out from here up, clear of the app's fixed notification IDs
+         * (service, calls, workout, timers).
+         */
+        private const val FIRST_CARD_ID = 100_000
+        private const val LAST_CARD_ID = 999_999
         private const val GROUP_PREFIX = "ios:"
 
         /** Older messages of a busy chat are still on the iPhone; the watch keeps it short. */
@@ -54,12 +58,19 @@ class NotificationRenderer(
         /** Group chat name, or null for a 1:1 chat. */
         val title: String?
     ) {
-        val messages = LinkedHashMap<UInt, ChatMessage>()
+        /**
+         * Keyed by the UID (as a Long) for messages of the current session, and by a negative
+         * placeholder for messages kept from an earlier session (their UIDs mean nothing now).
+         */
+        val messages = LinkedHashMap<Long, ChatMessage>()
         lateinit var latestEvent: AncsNotificationEvent
         lateinit var latestAttrs: AncsAttributeParser.NotificationAttributes
+
+        /** UIDs of this session's messages: the ones actions may name. */
+        val currentUids: List<UInt> get() = messages.keys.filter { it >= 0 }.map { it.toUInt() }
     }
 
-    private class ChatMessage(val sender: String, val text: String, val timestamp: Long)
+    private class ChatMessage(val sender: String, val text: String, val timestamp: Long, val fingerprint: String)
 
     /** Notifications of one iPhone app, stacked under a group summary. */
     private class AppGroup(val key: String, val summaryId: Int) {
@@ -70,14 +81,95 @@ class NotificationRenderer(
         var categoryId: Byte = AncsConstants.CATEGORY_OTHER
     }
 
+    /** A notification with its own card (not a chat), and the app group it's in. */
+    private class Card(val notifId: Int, val group: AppGroup?, val fingerprint: String?)
+
     // Called from the pipeline's coroutines and BLE callbacks, so all state is behind a lock
     private val lock = Any()
     private val groups = mutableMapOf<String, AppGroup>()
     private val conversations = mutableMapOf<String, Conversation>()
     private val uidToConversation = mutableMapOf<UInt, Conversation>()
 
-    /** Standalone (non-chat) notifications and the app group they're in. */
-    private val uidToGroup = mutableMapOf<UInt, AppGroup>()
+    /** This session's cards by UID. */
+    private val cards = mutableMapOf<UInt, Card>()
+
+    /**
+     * Cards still on the watch from an earlier session. iOS numbers notifications anew per
+     * session, so these have no UID until the iPhone lists them again as pre-existing.
+     */
+    private val staleCards = mutableListOf<Card>()
+    private var nextStaleKey = -1L
+    private var nextCardId = FIRST_CARD_ID
+
+    /**
+     * The ANCS session the shown notifications' UIDs belong to. Goes into every action intent:
+     * an action from an older session would name a UID iOS has since given to another
+     * notification, so it is ignored (AncsNotificationPipeline).
+     */
+    @Volatile
+    var session: Int = 0
+        private set
+
+    /**
+     * A new ANCS session starts: this session's notifications stay on screen but lose their
+     * UIDs. The iPhone lists what it still has as pre-existing right after subscribing, and
+     * those are matched back ([showFullNotification], [adoptStale]); [sweepStale] removes the
+     * rest, which were cleared on the iPhone meanwhile. Returns whether anything is stale.
+     */
+    fun startNewSession(newSession: Int): Boolean = synchronized(lock) {
+        session = newSession
+        staleCards += cards.values
+        cards.clear()
+        uidToConversation.clear()
+        for (conversation in conversations.values) {
+            val entries = conversation.messages.entries.map { it.key to it.value }
+            conversation.messages.clear()
+            entries.forEach { (key, message) ->
+                conversation.messages[if (key >= 0) nextStaleKey-- else key] = message
+            }
+        }
+        hasStaleLocked()
+    }
+
+    fun hasStale(): Boolean = synchronized(lock) { hasStaleLocked() }
+
+    private fun hasStaleLocked() =
+        staleCards.isNotEmpty() || conversations.values.any { c -> c.messages.keys.any { it < 0 } }
+
+    /**
+     * The iPhone has listed everything it still has: what's left from earlier sessions was
+     * cleared there, so it goes here too.
+     */
+    fun sweepStale(forSession: Int) {
+        synchronized(lock) {
+            if (session != forSession) return
+            val touched = mutableSetOf<AppGroup>()
+            var removed = 0
+            staleCards.forEach { card ->
+                notificationManager.cancel(card.notifId)
+                card.group?.let { leaveGroup(it, card.notifId); touched += it }
+                removed++
+            }
+            staleCards.clear()
+            for (conversation in conversations.values.toList()) {
+                val staleKeys = conversation.messages.keys.filter { it < 0 }
+                if (staleKeys.isEmpty()) continue
+                removed += staleKeys.size
+                staleKeys.forEach { conversation.messages.remove(it) }
+                touched += conversation.group
+                if (conversation.messages.isEmpty()) {
+                    conversations.remove(conversation.key)
+                    notificationManager.cancel(conversation.notifId)
+                    leaveGroup(conversation.group, conversation.notifId)
+                } else {
+                    postConversation(conversation, alert = false)
+                }
+            }
+            // Summaries still carry the old UIDs in their swipe action
+            touched.filter { it.members.isNotEmpty() }.forEach { postGroupSummary(it) }
+            if (removed > 0) Log.i(TAG, "Removed $removed notifications cleared on the iPhone while away")
+        }
+    }
 
     /**
      * The iPhone never sent this notification's content (even after retries). Still let the
@@ -89,7 +181,7 @@ class NotificationRenderer(
         synchronized(lock) {
             // Real content made it after all (e.g. a late response): keep it
             val uid = event.notificationUid
-            if (uid in uidToConversation || uid in uidToGroup) return
+            if (uid in uidToConversation || uid in cards) return
 
             val builder = NotificationCompat.Builder(context, channelFor(event.categoryId))
                 .setSmallIcon(NotificationIcons.iconForCategory(event.categoryId))
@@ -99,7 +191,9 @@ class NotificationRenderer(
 
             builder.priority = NotificationCompat.PRIORITY_HIGH
 
-            notificationManager.notify(uidToNotifId(uid), builder.build())
+            val notifId = allocateCardId()
+            notificationManager.notify(notifId, builder.build())
+            cards[uid] = Card(notifId, group = null, fingerprint = null)
         }
     }
 
@@ -113,7 +207,18 @@ class NotificationRenderer(
         appIcon: Bitmap?
     ) {
         synchronized(lock) {
-            renderFullNotification(event, attrs, appDisplayName, appIcon)
+            renderFullNotification(event, attrs, appDisplayName, appIcon, adoptOnly = false)
+        }
+    }
+
+    /**
+     * A pre-existing notification the user doesn't want shown (filters, Do Not Disturb, or
+     * pre-existing ones off): if it is one still on the watch from an earlier session, give that
+     * card its new UID back, quietly, so swiping it and its removal on the iPhone work again.
+     */
+    fun adoptStale(event: AncsNotificationEvent, attrs: AncsAttributeParser.NotificationAttributes) {
+        synchronized(lock) {
+            renderFullNotification(event, attrs, appDisplayName = null, appIcon = null, adoptOnly = true)
         }
     }
 
@@ -121,45 +226,72 @@ class NotificationRenderer(
         event: AncsNotificationEvent,
         attrs: AncsAttributeParser.NotificationAttributes,
         appDisplayName: String?,
-        appIcon: Bitmap?
+        appIcon: Bitmap?,
+        adoptOnly: Boolean
     ) {
         val uid = event.notificationUid
-        val group = attrs.appIdentifier?.let { appId ->
-            val group = groups.getOrPut(GROUP_PREFIX + appId) {
-                AppGroup(GROUP_PREFIX + appId, stableNotifId("summary|$appId"))
-            }
-            group.appName = appDisplayName ?: event.categoryName
-            if (appIcon != null) group.appIcon = appIcon
-            group.categoryId = event.categoryId
-            group
-        }
-
+        val appId = attrs.appIdentifier
         val sender = attrs.title
         val text = attrs.message
         val conversationKey = if (
-            group != null &&
+            appId != null &&
             event.categoryId == AncsConstants.CATEGORY_SOCIAL &&
             !sender.isNullOrEmpty() &&
             !text.isNullOrEmpty()
         ) {
             // In group chats iOS puts the sender in the title and the chat name in the subtitle
-            "${group.key}|${attrs.subtitle?.takeIf { it.isNotEmpty() } ?: sender}"
+            "$GROUP_PREFIX$appId|${attrs.subtitle?.takeIf { it.isNotEmpty() } ?: sender}"
         } else {
             null
+        }
+
+        // Still on the watch from an earlier session? Only the iPhone's list of what it already
+        // has (pre-existing) is matched, so a new notification that happens to read the same
+        // still alerts. One the user swiped away meanwhile stays away (that swipe couldn't reach
+        // the iPhone).
+        val fingerprint = fingerprint(attrs)
+        val staleMessageKey = if (event.isPreExisting && conversationKey != null) {
+            conversations[conversationKey]
+                ?.takeIf { isShowing(it.notifId) }
+                ?.messages?.entries
+                ?.firstOrNull { it.key < 0 && it.value.fingerprint == fingerprint }?.key
+        } else null
+        val staleCard = if (event.isPreExisting && staleMessageKey == null) {
+            staleCards.firstOrNull { it.fingerprint == fingerprint }?.let { card ->
+                if (isShowing(card.notifId)) card else {
+                    staleCards.remove(card)
+                    card.group?.let { leaveGroup(it, card.notifId) }
+                    null
+                }
+            }
+        } else null
+        if (adoptOnly && staleMessageKey == null && staleCard == null) return
+
+        val group = appId?.let {
+            val group = groups.getOrPut(GROUP_PREFIX + it) {
+                AppGroup(GROUP_PREFIX + it, stableNotifId("summary|$it"))
+            }
+            if (!adoptOnly) {
+                group.appName = appDisplayName ?: event.categoryName
+                if (appIcon != null) group.appIcon = appIcon
+                group.categoryId = event.categoryId
+            }
+            group
         }
 
         // A modified notification may have moved to another conversation, or stopped being a chat
         uidToConversation[uid]?.let { existing ->
             if (existing.key != conversationKey) removeChatMessage(uid, existing)
         }
-        if (conversationKey != null) {
-            uidToGroup.remove(uid)?.let { leaveGroup(it, uidToNotifId(uid)) }
-        }
+        // The conversation card replaces this message's own card, if it had one
+        if (conversationKey != null) removeCard(uid)
 
         if (conversationKey != null && group != null && sender != null && text != null) {
-            showChatMessage(event, attrs, group, conversationKey, sender, text)
+            showChatMessage(event, attrs, group, conversationKey, sender, text, fingerprint, staleMessageKey)
         } else {
-            showStandalone(event, attrs, group, appDisplayName, appIcon)
+            val name = if (adoptOnly) group?.appName else appDisplayName
+            val icon = if (adoptOnly) group?.appIcon else appIcon
+            showStandalone(event, attrs, group, name, icon, fingerprint, staleCard)
         }
         group?.let { postGroupSummary(it) }
     }
@@ -169,10 +301,14 @@ class NotificationRenderer(
         attrs: AncsAttributeParser.NotificationAttributes,
         group: AppGroup?,
         appDisplayName: String?,
-        appIcon: Bitmap?
+        appIcon: Bitmap?,
+        fingerprint: String,
+        staleCard: Card?
     ) {
         val uid = event.notificationUid
-        val notifId = uidToNotifId(uid)
+        val existing = cards[uid]
+        val notifId = staleCard?.notifId ?: existing?.notifId ?: allocateCardId()
+        if (staleCard != null) staleCards.remove(staleCard)
 
         val title = buildTitle(event, attrs, appDisplayName)
         val body = buildBody(attrs)
@@ -206,17 +342,20 @@ class NotificationRenderer(
 
         builder.priority = NotificationCompat.PRIORITY_HIGH
         builder.setCategory(NotificationCompat.CATEGORY_MESSAGE)
+        // Back from an earlier session: already seen, so no second buzz
+        if (staleCard != null) builder.setOnlyAlertOnce(true)
 
         val uids = listOf(uid)
         builder.setDeleteIntent(createActionIntent(notifId, "dismiss", uids, AncsConstants.ACTION_NEGATIVE))
         addActions(builder, event, attrs, notifId, positiveUids = uids, negativeUids = uids)
 
         notificationManager.notify(notifId, builder.build())
-        if (group != null) {
-            group.members += notifId
-            uidToGroup[uid] = group
-        }
-        Log.d(TAG, "Showed notification uid=$uid: $title")
+        listOfNotNull(existing?.group, staleCard?.group)
+            .filter { it !== group }
+            .forEach { leaveGroup(it, notifId) }
+        group?.members?.add(notifId)
+        cards[uid] = Card(notifId, group, fingerprint)
+        Log.d(TAG, "Showed notification uid=$uid${if (staleCard != null) " (kept from before)" else ""}: $title")
     }
 
     private fun showChatMessage(
@@ -225,7 +364,9 @@ class NotificationRenderer(
         group: AppGroup,
         key: String,
         sender: String,
-        text: String
+        text: String,
+        fingerprint: String,
+        staleMessageKey: Long?
     ) {
         val uid = event.notificationUid
         val conversation = conversations.getOrPut(key) {
@@ -236,16 +377,16 @@ class NotificationRenderer(
                 title = attrs.subtitle?.takeIf { it.isNotEmpty() }
             )
         }
-        conversation.messages[uid] = ChatMessage(
-            sender, text, attrs.timestampMillis ?: System.currentTimeMillis()
+        staleMessageKey?.let { conversation.messages.remove(it) }
+        conversation.messages[uid.toLong()] = ChatMessage(
+            sender, text, attrs.timestampMillis ?: System.currentTimeMillis(), fingerprint
         )
         conversation.latestEvent = event
         conversation.latestAttrs = attrs
         uidToConversation[uid] = conversation
 
-        // The conversation card replaces this message's own card, if it had one
-        notificationManager.cancel(uidToNotifId(uid))
-        postConversation(conversation, alert = true)
+        // A message back from an earlier session was seen already: no second buzz
+        postConversation(conversation, alert = staleMessageKey == null)
         group.members += conversation.notifId
         Log.d(TAG, "Added uid=$uid to conversation ${conversation.key} (${conversation.messages.size} messages)")
     }
@@ -266,7 +407,8 @@ class NotificationRenderer(
         val style = NotificationCompat.BigTextStyle()
             .bigText(messages.asReversed().joinToString("\n\n") { line(it) })
 
-        val allUids = conversation.messages.keys.toList()
+        // Only this session's UIDs: older ones may name other notifications by now
+        val allUids = conversation.currentUids
         val notifId = conversation.notifId
         val builder = NotificationCompat.Builder(context, channelFor(group.categoryId))
             .setSmallIcon(NotificationIcons.iconForCategory(AncsConstants.CATEGORY_SOCIAL))
@@ -292,18 +434,23 @@ class NotificationRenderer(
             builder.setSubText(group.appName)
         }
 
-        val latestUid = conversation.messages.entries.maxBy { it.value.timestamp }.key
-        addActions(
-            builder, conversation.latestEvent, conversation.latestAttrs, notifId,
-            positiveUids = listOf(latestUid),
-            negativeUids = allUids
-        )
+        val latestUid = conversation.messages.entries
+            .filter { it.key >= 0 }
+            .maxByOrNull { it.value.timestamp }
+            ?.key?.toUInt()
+        if (latestUid != null) {
+            addActions(
+                builder, conversation.latestEvent, conversation.latestAttrs, notifId,
+                positiveUids = listOf(latestUid),
+                negativeUids = allUids
+            )
+        }
 
         notificationManager.notify(notifId, builder.build())
     }
 
     private fun removeChatMessage(uid: UInt, conversation: Conversation) {
-        conversation.messages.remove(uid)
+        conversation.messages.remove(uid.toLong())
         uidToConversation.remove(uid)
         if (conversation.messages.isEmpty()) {
             conversations.remove(conversation.key)
@@ -316,7 +463,7 @@ class NotificationRenderer(
 
     private fun postGroupSummary(group: AppGroup) {
         // Swiping the whole group away clears every notification in it on the iPhone
-        val groupUids = uidToGroup.filterValues { it === group }.keys +
+        val groupUids = cards.filterValues { it.group === group }.keys +
             uidToConversation.filterValues { it.group === group }.keys
 
         val builder = NotificationCompat.Builder(context, channelFor(group.categoryId))
@@ -387,9 +534,41 @@ class NotificationRenderer(
                 return
             }
 
-            val notifId = uidToNotifId(notificationUid)
-            notificationManager.cancel(notifId)
-            uidToGroup.remove(notificationUid)?.let { leaveGroup(it, notifId) }
+            removeCard(notificationUid)
+        }
+    }
+
+    private fun removeCard(uid: UInt) {
+        val card = cards.remove(uid) ?: return
+        notificationManager.cancel(card.notifId)
+        card.group?.let { leaveGroup(it, card.notifId) }
+    }
+
+    /**
+     * What identifies a notification across sessions: the app and the content iOS sent, with its
+     * posting time (to the second), since the UID changes.
+     */
+    private fun fingerprint(attrs: AncsAttributeParser.NotificationAttributes): String =
+        listOf(attrs.appIdentifier, attrs.title, attrs.subtitle, attrs.message, attrs.date)
+            .joinToString("\u0001") { it.orEmpty() }
+
+    private fun isShowing(notifId: Int): Boolean =
+        runCatching { notificationManager.activeNotifications.any { it.id == notifId } }.getOrDefault(true)
+
+    /**
+     * A free ID for a card. Not derived from the UID: iOS reuses UIDs in the next session, and the
+     * new notification would replace an unrelated one still shown from before. IDs in use by
+     * this app (including ones left from before a restart) are skipped.
+     */
+    private fun allocateCardId(): Int {
+        val inUse = HashSet<Int>()
+        runCatching { notificationManager.activeNotifications.forEach { inUse += it.id } }
+        cards.values.forEach { inUse += it.notifId }
+        staleCards.forEach { inUse += it.notifId }
+        while (true) {
+            val id = nextCardId
+            nextCardId = if (nextCardId >= LAST_CARD_ID) FIRST_CARD_ID else nextCardId + 1
+            if (id !in inUse) return id
         }
     }
 
@@ -442,6 +621,7 @@ class NotificationRenderer(
                 NotificationActionReceiver.EXTRA_NOTIFICATION_UIDS,
                 notificationUids.map { it.toInt() }.toIntArray()
             )
+            putExtra(NotificationActionReceiver.EXTRA_SESSION, session)
             putExtra("action_id", actionId)
         }
         return PendingIntent.getBroadcast(
@@ -483,9 +663,6 @@ class NotificationRenderer(
         }
     }
 
-    private fun uidToNotifId(uid: UInt): Int =
-        (uid.toInt() and 0x7FFFFFFF) + NOTIFICATION_ID_OFFSET
-
-    /** Conversation and summary IDs: negative, so they never collide with uid-based IDs. */
+    /** Conversation and summary IDs: negative, so they never collide with card IDs. */
     private fun stableNotifId(key: String): Int = key.hashCode() or Int.MIN_VALUE
 }

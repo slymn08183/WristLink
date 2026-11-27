@@ -20,6 +20,7 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.security.MessageDigest
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Cover art for what's playing on the iPhone. AMS tells the watch the artist, album and title
@@ -45,8 +46,11 @@ class AlbumArt(context: Context, media: AmsMediaManager) {
     /** The current track's cover, or null while unknown. */
     val art: StateFlow<Bitmap?> = _art.asStateFlow()
 
-    /** Covers the iPhone couldn't find this session; asked again after a restart. */
-    private val misses = mutableSetOf<String>()
+    /**
+     * Covers the iPhone couldn't find this session; asked again after a restart. Read by the
+     * collector and written by lookups, which run on different IO threads.
+     */
+    private val misses: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private var lookup: Job? = null
 
     init {

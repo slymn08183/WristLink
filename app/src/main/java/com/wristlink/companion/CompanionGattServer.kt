@@ -16,9 +16,11 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
 import android.os.Build
+import android.os.SystemClock
 import android.util.Base64
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.wristlink.ble.BleConnectionManager
 import com.wristlink.diagnostics.LinkStats
 import com.wristlink.health.HealthCollector
 import com.wristlink.health.HealthHistory
@@ -26,6 +28,7 @@ import com.wristlink.health.HealthMetrics
 import com.wristlink.health.HealthProfile
 import com.wristlink.health.LiveHealth
 import com.wristlink.health.HealthStore
+import com.wristlink.service.WristLinkService
 import com.wristlink.settings.SettingsManager
 import com.wristlink.weather.WeatherStore
 import com.wristlink.workout.WorkoutSync
@@ -33,11 +36,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
 /**
@@ -48,18 +53,23 @@ import java.util.concurrent.Executors
  * and talks to this GATT server over that same link.
  *
  * - [INFO_UUID] (read, notify): JSON with battery, link stats and how many health samples wait.
+ *   A notification has to fit one packet, so when the full JSON doesn't, a compact one goes out
+ *   (`"compact":true`, only what changes), or just `{"changed":true}` and the iPhone reads it.
  * - [SYNC_UUID] (write, notify): newline-terminated JSON messages. The iPhone writes
  *   `{"op":"pull","after":ID,"max":N}` and gets `{"op":"batch","items":[...],"more":B}` back,
  *   split into notifications that fit the MTU; once the samples are in Apple Health it writes
  *   `{"op":"ack","upTo":ID}` and the watch drops them. Settings go both ways (`getSettings`,
  *   `setSetting`, and `settings` pushed whenever they change on the watch), and the iPhone sends
  *   the forecast (`weather`, see WeatherStore). Writes from the iPhone are newline-framed too and
- *   may arrive in several pieces, with or without response.
+ *   may arrive in several pieces, with or without response. After anything that may have cut a
+ *   message short (a dropped queue, a disconnect, a new subscription, a restart) the next message
+ *   starts with an extra newline, which ends whatever partial line the iPhone still holds.
  * - The iPhone app says what it can do with `{"op":"hello","features":[…]}`. One that has
  *   "images" fetches app icons and album art for the watch (PhoneImages).
  *
  * To keep the iPhone (and both batteries) mostly asleep, the info notification announcing new
- * samples goes out at most every [PENDING_NOTIFY_INTERVAL_MS], or sooner when many are waiting.
+ * samples goes out at most every [PENDING_NOTIFY_INTERVAL_MS], or sooner when many are waiting,
+ * and changes close together go out as one.
  */
 @SuppressLint("MissingPermission")
 class CompanionGattServer(private val context: Context) {
@@ -76,12 +86,26 @@ class CompanionGattServer(private val context: Context) {
         private const val DEFAULT_MTU = 23
         private const val BUSY_RETRY_MS = 30L
         private const val MAX_BUSY_RETRIES = 50
+        /** onNotificationSent with an error: the piece didn't go out; try it again after this. */
+        private const val FAILED_RETRY_MS = 50L
+        /** No onNotificationSent this long after a piece: the stack lost it (or the link is gone). */
+        private const val SENT_WATCHDOG_MS = 2_500L
+        /** Lost callbacks in a row before the GATT server is opened afresh. */
+        private const val MAX_STALLS = 3
+        /** GATT_CONNECTION_CONGESTED: the piece was sent, the stack is just full. */
+        private const val GATT_CONGESTED = 0x8f
         private const val MAX_ATTRIBUTE_LENGTH = 512
         private const val MAX_BATCH = 100
         private const val PENDING_NOTIFY_INTERVAL_MS = 15 * 60 * 1000L
         private const val PENDING_NOTIFY_THRESHOLD = 300
+        /** Info changes this close together (an ack, a battery tick, the weather) go out as one. */
+        private const val INFO_NOTIFY_DELAY_MS = 1_500L
         /** Several changes in a row (a slider, quiet mode flipping DND and wake) go out as one. */
         private const val SETTINGS_PUSH_DELAY_MS = 400L
+        /** Messages from this size (a workout with its track, the summary) get the fast interval. */
+        private const val BIG_MESSAGE_BYTES = 4 * 1024
+        /** Back to the low-power interval this long after the outbox emptied. */
+        private const val RELAX_DELAY_MS = 2_000L
         /** Album art arrives as about 20 KB of base64. */
         private const val MAX_INBOX_BYTES = 96 * 1024
         private const val NEWLINE = '\n'.code.toByte()
@@ -89,10 +113,15 @@ class CompanionGattServer(private val context: Context) {
 
     private val bluetoothManager = context.getSystemService(BluetoothManager::class.java)
     private val store = HealthStore.get(context)
+
+    @Volatile
     private var server: BluetoothGattServer? = null
+    @Volatile
+    private var running = false
 
     // GATT callbacks arrive on binder threads; everything stateful runs on this one thread
-    private val scope = CoroutineScope(SupervisorJob() + Executors.newSingleThreadExecutor().asCoroutineDispatcher())
+    private val executor = Executors.newSingleThreadExecutor()
+    private val scope = CoroutineScope(SupervisorJob() + executor.asCoroutineDispatcher())
 
     private val infoCharacteristic = notifiable(
         INFO_UUID,
@@ -111,16 +140,52 @@ class CompanionGattServer(private val context: Context) {
     /** iPhone apps that said they fetch images for the watch. */
     private val imageClients = mutableSetOf<BluetoothDevice>()
     /** Bytes written by each iPhone that don't end in a newline yet. */
-    private val inbox = mutableMapOf<BluetoothDevice, ByteArray>()
+    private val inboxes = mutableMapOf<BluetoothDevice, Inbox>()
+    /** iPhone apps that frame their writes with newlines (said hello, or sent one). */
+    private val framedClients = mutableSetOf<BluetoothDevice>()
+
+    /** One message on its way out, sent piece by piece from [offset]. */
+    private class Outgoing(
+        val device: BluetoothDevice,
+        val characteristic: BluetoothGattCharacteristic,
+        var bytes: ByteArray,
+        /** Named in the log once the last piece is out (big messages only). */
+        val label: String?
+    ) {
+        var offset = 0
+    }
+
+    /** The piece of the outbox's first message the stack has, waiting for onNotificationSent. */
+    private class InFlight(val message: Outgoing, val length: Int) {
+        val sentAt = SystemClock.elapsedRealtime()
+    }
 
     /** Notifications go out one at a time: the next waits for onNotificationSent. */
-    private val outbox = ArrayDeque<Triple<BluetoothDevice, BluetoothGattCharacteristic, ByteArray>>()
-    private var sending = false
-    /** Times in a row the stack refused the piece at the head of the outbox. */
+    private val outbox = ArrayDeque<Outgoing>()
+    private var inFlight: InFlight? = null
+    private var sentWatchdog: Job? = null
+    private var retryJob: Job? = null
+    /** Times in a row the stack refused (or failed) the piece at the head of the outbox. */
     private var busyRetries = 0
+    /** onNotificationSent callbacks lost in a row. */
+    private var stalls = 0
+    /**
+     * Devices whose sync stream is known to sit between two messages. Any other gets a newline
+     * first, ending a partial message left over on the iPhone.
+     */
+    private val cleanDevices = mutableSetOf<BluetoothDevice>()
+
+    private var spedUp = false
+    private var relaxJob: Job? = null
 
     private var lastBattery = -1
+    private var lastPlugged: Boolean? = null
     private var lastPendingNotifyMs = 0L
+    private var infoNotify: Job? = null
+    /** The info each device was last notified, so a notification that changes nothing stays off the air. */
+    private val lastInfoSent = mutableMapOf<BluetoothDevice, ByteArray>()
+    /** The info JSON as of each device's read at offset 0; long reads take the rest from it. */
+    private val infoReadCache = ConcurrentHashMap<BluetoothDevice, ByteArray>()
 
     private var settingsWatcher: Job? = null
     private var profileWatcher: Job? = null
@@ -136,8 +201,10 @@ class CompanionGattServer(private val context: Context) {
     private val batteryReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context, intent: Intent) {
             val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
-            if (level != lastBattery) {
+            val plugged = intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0
+            if (level != lastBattery || plugged != lastPlugged) {
                 lastBattery = level
+                lastPlugged = plugged
                 notifyInfo()
             }
         }
@@ -145,13 +212,19 @@ class CompanionGattServer(private val context: Context) {
 
     private val callback = object : BluetoothGattServerCallback() {
         override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
-            if (newState == BluetoothGatt.STATE_DISCONNECTED) scope.launch {
-                subscribers.values.forEach { it.remove(device) }
-                mtus.remove(device)
-                inbox.remove(device)
-                imageClients.remove(device)
-                updateImageRequester()
-                outbox.removeAll { it.first == device }
+            if (newState == BluetoothGatt.STATE_DISCONNECTED) {
+                infoReadCache.remove(device)
+                scope.launch {
+                    subscribers.values.forEach { it.remove(device) }
+                    mtus.remove(device)
+                    inboxes.remove(device)
+                    framedClients.remove(device)
+                    imageClients.remove(device)
+                    lastInfoSent.remove(device)
+                    updateImageRequester()
+                    dropMessages(device)
+                    sendNext()
+                }
             }
         }
 
@@ -166,8 +239,13 @@ class CompanionGattServer(private val context: Context) {
                 server?.sendResponse(device, requestId, BluetoothGatt.GATT_READ_NOT_PERMITTED, offset, null)
                 return
             }
-            // Long reads come in pieces with growing offsets; the JSON only changes slowly
-            val value = infoJson()
+            // A long read comes in pieces with growing offsets: every piece from the same JSON,
+            // or the iPhone would put together halves of two different ones
+            val value = if (offset == 0) {
+                infoBytes(infoJson()).also { infoReadCache[device] = it }
+            } else {
+                infoReadCache[device] ?: infoBytes(infoJson()).also { infoReadCache[device] = it }
+            }
             val chunk = if (offset < value.size) value.copyOfRange(offset, value.size) else ByteArray(0)
             server?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, chunk)
         }
@@ -197,7 +275,19 @@ class CompanionGattServer(private val context: Context) {
                 scope.launch {
                     val set = subscribers.getOrPut(uuid) { mutableSetOf() }
                     if (enabled) set.add(device) else set.remove(device)
-                    if (uuid == SYNC_UUID) updateImageRequester()
+                    when (uuid) {
+                        SYNC_UUID -> {
+                            // Whatever was half sent is lost to the iPhone, or will be
+                            cleanDevices.remove(device)
+                            if (!enabled) dropMessages(device, syncCharacteristic)
+                            updateImageRequester()
+                        }
+                        INFO_UUID -> {
+                            lastInfoSent.remove(device)
+                            if (!enabled) dropMessages(device, infoCharacteristic)
+                        }
+                    }
+                    sendNext()
                 }
                 Log.i(TAG, "${device.address} ${if (enabled) "subscribed to" else "unsubscribed from"} $uuid")
             }
@@ -205,24 +295,14 @@ class CompanionGattServer(private val context: Context) {
         }
 
         override fun onNotificationSent(device: BluetoothDevice, status: Int) {
-            scope.launch {
-                sending = false
-                sendNext()
-            }
+            scope.launch { onSent(device, status) }
         }
     }
 
     fun start() {
-        if (server != null) return
-        val s = bluetoothManager?.openGattServer(context, callback) ?: run {
-            Log.w(TAG, "Couldn't open GATT server")
-            return
-        }
-        val service = BluetoothGattService(SERVICE_UUID, BluetoothGattService.SERVICE_TYPE_PRIMARY)
-        service.addCharacteristic(infoCharacteristic)
-        service.addCharacteristic(syncCharacteristic)
-        s.addService(service)
-        server = s
+        if (running) return
+        if (!openServer()) return
+        running = true
         context.registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         ContextCompat.registerReceiver(
             context, dndReceiver, IntentFilter(NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED),
@@ -233,20 +313,70 @@ class CompanionGattServer(private val context: Context) {
         Log.i(TAG, "Companion service up (protocol $PROTOCOL_VERSION)")
     }
 
-    fun stop() {
-        runCatching { context.unregisterReceiver(batteryReceiver) }
-        runCatching { context.unregisterReceiver(dndReceiver) }
-        settingsWatcher?.cancel()
-        profileWatcher?.cancel()
-        server?.close()
-        server = null
+    private fun openServer(): Boolean {
+        val s = bluetoothManager?.openGattServer(context, callback) ?: run {
+            Log.w(TAG, "Couldn't open GATT server")
+            return false
+        }
+        val service = BluetoothGattService(SERVICE_UUID, BluetoothGattService.SERVICE_TYPE_PRIMARY)
+        service.addCharacteristic(infoCharacteristic)
+        service.addCharacteristic(syncCharacteristic)
+        s.addService(service)
+        server = s
+        return true
     }
 
-    /** Push fresh info to every subscribed iPhone app. */
+    /** The service is going away: nothing of this server may keep running or waiting. */
+    fun stop() {
+        if (!running) return
+        running = false
+        runCatching { context.unregisterReceiver(batteryReceiver) }
+        runCatching { context.unregisterReceiver(dndReceiver) }
+        val s = server
+        server = null
+        runCatching { s?.close() }
+        scope.cancel()
+        infoReadCache.clear()
+        // Image fetches waiting for an answer get nothing now instead of after their timeout
+        if (PhoneImages.requester != null) PhoneImages.onDisconnected()
+        executor.execute {
+            outbox.clear()
+            inFlight = null
+            subscribers.clear()
+            mtus.clear()
+            inboxes.clear()
+            framedClients.clear()
+            imageClients.clear()
+            cleanDevices.clear()
+            lastInfoSent.clear()
+            if (spedUp) {
+                spedUp = false
+                WristLinkService.connectionManager?.relaxAfterTransfer(BleConnectionManager.OWNER_COMPANION)
+            }
+        }
+        executor.shutdown()
+    }
+
+    /** Push fresh info to every subscribed iPhone app, once for changes close together. */
     fun notifyInfo() {
         scope.launch {
-            val value = infoJson()
-            subscribers[INFO_UUID]?.forEach { enqueue(it, infoCharacteristic, value) }
+            if (infoNotify?.isActive == true) return@launch
+            infoNotify = scope.launch {
+                delay(INFO_NOTIFY_DELAY_MS)
+                pushInfo()
+            }
+        }
+    }
+
+    private fun pushInfo() {
+        val devices = subscribers[INFO_UUID].orEmpty()
+        if (devices.isEmpty()) return
+        val info = infoJson()
+        for (device in devices) {
+            val bytes = notifiedInfo(info, chunkSize(device))
+            if (lastInfoSent[device]?.contentEquals(bytes) == true) continue
+            lastInfoSent[device] = bytes
+            enqueue(Outgoing(device, infoCharacteristic, bytes, label = null))
         }
     }
 
@@ -286,30 +416,71 @@ class CompanionGattServer(private val context: Context) {
             return
         }
         PhoneImages.requester = { request ->
-            scope.launch { sendMessage(device, request) }
-            true
+            if (running) {
+                scope.launch { sendMessage(device, request) }
+                true
+            } else {
+                false
+            }
         }
     }
 
-    /** Collect a write and handle every complete line in it. */
+    /** Bytes of one iPhone's writes that don't end in a newline yet; grows as needed. */
+    private class Inbox {
+        var buffer = ByteArray(256)
+        var length = 0
+
+        fun append(source: ByteArray, from: Int, to: Int) {
+            val count = to - from
+            if (length + count > buffer.size) {
+                buffer = buffer.copyOf(maxOf(buffer.size * 2, length + count))
+            }
+            System.arraycopy(source, from, buffer, length, count)
+            length += count
+        }
+
+        fun text(): String = String(buffer, 0, length, Charsets.UTF_8)
+
+        fun clear() {
+            length = 0
+            // Don't hold on to an image's worth of memory between images
+            if (buffer.size > 4096) buffer = ByteArray(256)
+        }
+    }
+
+    /** Collect a write and handle every complete line in it. Only the new bytes are searched. */
     private fun receive(device: BluetoothDevice, value: ByteArray) {
-        var buffer = (inbox[device] ?: ByteArray(0)) + value
-        while (true) {
-            val newline = buffer.indexOf(NEWLINE)
-            if (newline < 0) break
-            val line = buffer.copyOfRange(0, newline).toString(Charsets.UTF_8)
-            buffer = buffer.copyOfRange(newline + 1, buffer.size)
+        val inbox = inboxes.getOrPut(device) { Inbox() }
+        var start = 0
+        for (i in value.indices) {
+            if (value[i] != NEWLINE) continue
+            framedClients += device
+            val line = if (inbox.length == 0) {
+                String(value, start, i - start, Charsets.UTF_8)
+            } else {
+                inbox.append(value, start, i)
+                inbox.text().also { inbox.clear() }
+            }
+            start = i + 1
             if (line.isNotBlank()) handleSyncRequest(device, line)
         }
-        // iPhone apps before protocol 4 send each request as one write with no newline
-        if (buffer.isNotEmpty() && buffer[0] == '{'.code.toByte()) {
-            val text = buffer.toString(Charsets.UTF_8)
+        if (start < value.size) inbox.append(value, start, value.size)
+
+        // iPhone apps before protocol 4 send each request as one write with no newline. Only
+        // for apps that never framed anything, and only once it could be a whole object.
+        if (inbox.length > 0 && device !in framedClients &&
+            inbox.buffer[0] == '{'.code.toByte() && inbox.buffer[inbox.length - 1] == '}'.code.toByte()
+        ) {
+            val text = inbox.text()
             if (runCatching { JSONObject(text) }.isSuccess) {
+                inbox.clear()
                 handleSyncRequest(device, text)
-                buffer = ByteArray(0)
             }
         }
-        inbox[device] = if (buffer.size > MAX_INBOX_BYTES) ByteArray(0) else buffer
+        if (inbox.length > MAX_INBOX_BYTES) {
+            Log.w(TAG, "Dropping ${inbox.length} unframed bytes from ${device.address}")
+            inbox.clear()
+        }
     }
 
     private fun handleSyncRequest(device: BluetoothDevice, text: String) {
@@ -324,8 +495,8 @@ class CompanionGattServer(private val context: Context) {
                     .put("op", "batch")
                     .put("items", JSONArray(batch.map { it.toJson() }))
                     .put("more", more)
-                sendMessage(device, reply)
-                Log.i(TAG, "Sent ${batch.size} samples after $after (more=$more)")
+                sendMessage(device, reply, label = "batch of ${batch.size} samples after $after")
+                Log.i(TAG, "Queued ${batch.size} samples after $after (more=$more)")
             }
             "ack" -> {
                 store.acknowledge(request.optLong("upTo"))
@@ -343,9 +514,10 @@ class CompanionGattServer(private val context: Context) {
             "nextWorkout" -> {
                 val workout = HealthHistory.get(context).nextUnsyncedWorkout()
                 val message = workout?.let { WorkoutSync.message(context, it) } ?: WorkoutSync.none()
-                sendMessage(device, message)
                 val text = message.toString()
-                Log.i(TAG, "Sent workout ${workout?.id ?: "none"} (${text.length} bytes)")
+                val label = "workout ${workout?.id ?: "none"} (${text.length} bytes)"
+                sendMessage(device, text, label)
+                Log.i(TAG, "Queued $label")
                 // The last one sent, readable over adb, for when the iPhone can't read it
                 if (workout != null) runCatching {
                     context.getExternalFilesDir(null)?.resolve("last-workout.json")?.writeText(text)
@@ -361,8 +533,10 @@ class CompanionGattServer(private val context: Context) {
                 val summary = runCatching { HealthMetrics.summaryJson(context, days) }
                     .onFailure { Log.e(TAG, "Summary failed", it) }
                     .getOrElse { JSONObject().put("op", "summary").put("error", it.toString()) }
-                sendMessage(device, summary)
-                Log.i(TAG, "Sent summary of $days days")
+                val text = summary.toString()
+                val label = "summary of $days days (${text.length} bytes)"
+                sendMessage(device, text, label)
+                Log.i(TAG, "Queued $label")
             }
             "weather" -> {
                 WeatherStore.save(context, request)
@@ -372,6 +546,7 @@ class CompanionGattServer(private val context: Context) {
                 val features = request.optJSONArray("features")
                 val images = features != null && (0 until features.length()).any { features.optString(it) == "images" }
                 if (images) imageClients.add(device) else imageClients.remove(device)
+                framedClients += device
                 Log.i(TAG, "${device.address} says hello, features=$features")
                 updateImageRequester()
             }
@@ -401,30 +576,60 @@ class CompanionGattServer(private val context: Context) {
         sendMessage(device, reply)
     }
 
-    /** One JSON message on the sync characteristic, newline-terminated, split to fit the MTU. */
-    private fun sendMessage(device: BluetoothDevice, message: JSONObject) {
-        val bytes = (message.toString() + "\n").toByteArray(Charsets.UTF_8)
-        // An attribute value is at most 512 bytes however large the MTU (iPhones offer 517+), and
-        // the stack throws on anything longer
-        val chunk = minOf((mtus[device] ?: DEFAULT_MTU) - 3, MAX_ATTRIBUTE_LENGTH)
-        var offset = 0
-        while (offset < bytes.size) {
-            val end = minOf(offset + chunk, bytes.size)
-            enqueue(device, syncCharacteristic, bytes.copyOfRange(offset, end))
-            offset = end
-        }
+    private fun sendMessage(device: BluetoothDevice, message: JSONObject, label: String? = null) =
+        sendMessage(device, message.toString(), label)
+
+    /**
+     * One JSON message on the sync characteristic, newline-terminated, and newline-led too when
+     * the iPhone may hold part of an earlier one. Split into pieces when it is sent.
+     */
+    private fun sendMessage(device: BluetoothDevice, json: String, label: String?) {
+        if (!running) return
+        val lead = if (device in cleanDevices) "" else "\n"
+        cleanDevices += device
+        val bytes = (lead + json + "\n").toByteArray(Charsets.UTF_8)
+        if (bytes.size >= BIG_MESSAGE_BYTES) speedUp()
+        enqueue(Outgoing(device, syncCharacteristic, bytes, label))
     }
 
-    private fun enqueue(device: BluetoothDevice, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
-        outbox.addLast(Triple(device, characteristic, value))
+    private fun enqueue(message: Outgoing) {
+        outbox.addLast(message)
         sendNext()
     }
 
+    /**
+     * The largest piece one notification can carry to this device. The link has one ATT MTU,
+     * but the iPhone's exchange (reported here) and the watch's own client exchange (Nordic) can
+     * disagree, and a piece longer than the real one is cut short by the stack without an error:
+     * take the smaller. The client's is also the fallback when this server never heard of an MTU
+     * (the service restarted while the iPhone stayed connected). An attribute value is at most
+     * 512 bytes however large the MTU, and the stack throws on anything longer.
+     */
+    private fun chunkSize(device: BluetoothDevice): Int {
+        val serverMtu = mtus[device]
+        // 23 is Nordic's value before (or without) an exchange: says nothing about the link
+        val clientMtu = WristLinkService.connectionManager?.clientMtu?.takeIf { it > DEFAULT_MTU }
+        val mtu = when {
+            serverMtu != null && clientMtu != null -> minOf(serverMtu, clientMtu)
+            serverMtu != null -> serverMtu
+            clientMtu != null -> clientMtu
+            else -> DEFAULT_MTU
+        }
+        return (mtu - 3).coerceIn(DEFAULT_MTU - 3, MAX_ATTRIBUTE_LENGTH)
+    }
+
     private fun sendNext() {
-        if (sending) return
+        if (inFlight != null || retryJob?.isActive == true) return
         val s = server ?: return
-        val (device, characteristic, value) = outbox.removeFirstOrNull() ?: return
-        sending = true
+        val message = outbox.firstOrNull() ?: run {
+            onOutboxDrained()
+            return
+        }
+        val device = message.device
+        val end = minOf(message.offset + chunkSize(device), message.bytes.size)
+        val value = message.bytes.copyOfRange(message.offset, end)
+        val characteristic = message.characteristic
+        inFlight = InFlight(message, value.size)
         // A throw here would take the whole bridge down with it, so treat it like a busy stack
         val queued = runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -440,25 +645,161 @@ class CompanionGattServer(private val context: Context) {
             // Usually the stack is just busy. Dropping a piece would break the whole message
             // (a summary is ~20 of them), so the same piece goes again shortly. A device that
             // keeps refusing is gone: its queue is dropped rather than retried forever.
-            sending = false
-            if (++busyRetries <= MAX_BUSY_RETRIES) {
-                outbox.addFirst(Triple(device, characteristic, value))
-                scope.launch {
-                    delay(BUSY_RETRY_MS)
-                    sendNext()
+            inFlight = null
+            retryOrGiveUp(device, BUSY_RETRY_MS)
+            return
+        }
+        armSentWatchdog()
+    }
+
+    /**
+     * One watchdog for the whole stream rather than a timer per piece: it wakes when the piece in
+     * flight would be overdue, and goes back to sleep if that one was confirmed meanwhile.
+     */
+    private fun armSentWatchdog() {
+        if (sentWatchdog?.isActive == true) return
+        sentWatchdog = scope.launch {
+            while (true) {
+                val piece = inFlight ?: return@launch
+                val wait = piece.sentAt + SENT_WATCHDOG_MS - SystemClock.elapsedRealtime()
+                if (wait > 0) {
+                    delay(wait)
+                } else {
+                    // So the piece sent next gets a watchdog of its own
+                    sentWatchdog = null
+                    onSentMissing()
+                    return@launch
                 }
-            } else {
-                Log.w(TAG, "Notifications to ${device.address} keep failing, dropping its queue")
-                busyRetries = 0
-                outbox.removeAll { it.first == device }
+            }
+        }
+    }
+
+    /** The head piece didn't go out: the same piece again after [delayMs], up to a limit. */
+    private fun retryOrGiveUp(device: BluetoothDevice, delayMs: Long) {
+        if (++busyRetries <= MAX_BUSY_RETRIES) {
+            retryJob = scope.launch {
+                delay(delayMs)
+                retryJob = null
                 sendNext()
             }
+        } else {
+            Log.w(TAG, "Notifications to ${device.address} keep failing, dropping its queue")
+            busyRetries = 0
+            dropMessages(device)
+            sendNext()
+        }
+    }
+
+    private fun onSent(device: BluetoothDevice, status: Int) {
+        // Late, after the watchdog gave up on it, or for a queue dropped meanwhile
+        val sent = inFlight ?: return
+        if (sent.message.device != device) return
+        inFlight = null
+        stalls = 0
+        if (status != BluetoothGatt.GATT_SUCCESS && status != GATT_CONGESTED) {
+            // Not sent: moving on would leave a hole in the message
+            Log.w(TAG, "Notification to ${device.address} failed with status $status, sending it again")
+            retryOrGiveUp(device, FAILED_RETRY_MS)
             return
         }
         busyRetries = 0
+        val message = sent.message
+        message.offset += sent.length
+        if (message.offset >= message.bytes.size && outbox.firstOrNull() === message) {
+            outbox.removeFirst()
+            message.label?.let { Log.i(TAG, "Sent the last piece of $it to ${device.address}") }
+        }
+        sendNext()
     }
 
-    private fun infoJson(): ByteArray {
+    /**
+     * The stack never confirmed the piece in flight (callbacks are held back while the link is
+     * congested, and lost when it drops). Whether it went out is unknown, so the message starts
+     * over behind a newline, which makes the iPhone drop what it got of it. If confirmations
+     * keep getting lost, the GATT server itself is stuck: open it afresh.
+     */
+    private fun onSentMissing() {
+        val stuck = inFlight ?: return
+        inFlight = null
+        val message = stuck.message
+        stalls++
+        Log.w(
+            TAG, "No confirmation for a notification to ${message.device.address} " +
+                "(${message.label ?: "${message.bytes.size} bytes"}, ${message.offset}/${message.bytes.size} sent), stall $stalls"
+        )
+        if (stalls >= MAX_STALLS) {
+            stalls = 0
+            reopenServer()
+            return
+        }
+        if (message.characteristic === syncCharacteristic && message.offset > 0 &&
+            message.bytes.firstOrNull() != NEWLINE
+        ) {
+            message.bytes = byteArrayOf(NEWLINE) + message.bytes
+        }
+        message.offset = 0
+        sendNext()
+    }
+
+    /** Last resort for a stuck server: everything queued goes, and the iPhone sets up again. */
+    private fun reopenServer() {
+        Log.w(TAG, "Notifications keep getting stuck, opening the GATT server again")
+        val old = server
+        server = null
+        runCatching { old?.close() }
+        outbox.clear()
+        inFlight = null
+        retryJob?.cancel()
+        retryJob = null
+        busyRetries = 0
+        subscribers.clear()
+        mtus.clear()
+        inboxes.clear()
+        framedClients.clear()
+        imageClients.clear()
+        cleanDevices.clear()
+        lastInfoSent.clear()
+        infoReadCache.clear()
+        updateImageRequester()
+        onOutboxDrained()
+        // Adding the service again makes Android tell the iPhone its services changed, so the
+        // iPhone app discovers and subscribes again
+        if (running) openServer()
+    }
+
+    /**
+     * Drop what's queued for [device] (only on [characteristic], if given). The next sync
+     * message to it then starts with a newline, in case part of a dropped one went out.
+     */
+    private fun dropMessages(device: BluetoothDevice, characteristic: BluetoothGattCharacteristic? = null) {
+        fun matches(message: Outgoing) =
+            message.device == device && (characteristic == null || message.characteristic === characteristic)
+        if (inFlight?.message?.let(::matches) == true) inFlight = null
+        val removed = outbox.removeAll(::matches)
+        if (removed || characteristic == null || characteristic === syncCharacteristic) cleanDevices.remove(device)
+        if (removed) busyRetries = 0
+    }
+
+    /** A big message is queued: ask for the fast connection interval until the outbox is empty. */
+    private fun speedUp() {
+        relaxJob?.cancel()
+        relaxJob = null
+        if (spedUp) return
+        spedUp = true
+        WristLinkService.connectionManager?.speedUpForTransfer(BleConnectionManager.OWNER_COMPANION)
+    }
+
+    private fun onOutboxDrained() {
+        if (!spedUp || relaxJob?.isActive == true) return
+        relaxJob = scope.launch {
+            delay(RELAX_DELAY_MS)
+            if (outbox.isNotEmpty() || inFlight != null) return@launch
+            spedUp = false
+            WristLinkService.connectionManager?.relaxAfterTransfer(BleConnectionManager.OWNER_COMPANION)
+        }
+    }
+
+    private fun infoJson(): JSONObject {
         val battery = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
         val plugged = (battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
@@ -483,8 +824,29 @@ class CompanionGattServer(private val context: Context) {
             .put("hr", LiveHealth.latest(context)?.let { JSONObject().put("bpm", it.bpm).put("t", it.time) })
             // When the forecast on the watch was fetched (s), so the iPhone knows when to send a new one
             .put("weatherAt", WeatherStore.fetchedAtSeconds(context))
-            .toString()
-            .toByteArray(Charsets.UTF_8)
+    }
+
+    private fun infoBytes(info: JSONObject) = info.toString().toByteArray(Charsets.UTF_8)
+
+    /**
+     * The info as one notification, which can't be split: the full JSON when it fits, else the
+     * fields that change (still with every key an older iPhone app requires) marked compact, else
+     * just a note that it changed, for the iPhone to read it.
+     */
+    private fun notifiedInfo(info: JSONObject, max: Int): ByteArray {
+        val full = infoBytes(info)
+        if (full.size <= max) return full
+        val compact = JSONObject().put("compact", true)
+        for (key in listOf(
+            "protocol", "battery", "charging", "drops", "notifications",
+            "pending", "workoutsPending", "weatherAt", "hr"
+        )) {
+            info.opt(key)?.let { compact.put(key, it) }
+        }
+        infoBytes(compact).let { if (it.size <= max) return it }
+        compact.remove("hr")
+        infoBytes(compact).let { if (it.size <= max) return it }
+        return infoBytes(JSONObject().put("changed", true))
     }
 
     private fun notifiable(uuid: UUID, properties: Int, permissions: Int) = BluetoothGattCharacteristic(

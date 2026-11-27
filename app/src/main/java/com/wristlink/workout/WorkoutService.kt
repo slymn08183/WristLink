@@ -563,6 +563,8 @@ class WorkoutService : Service() {
             HealthHistory.get(this@WorkoutService).addWorkout(result.workout, result.laps, result.track)
         }
         Log.i(TAG, "Saved workout $id: ${type.key} ${result.workout.distance.roundToInt()} m, ${activeMs / 1000} s, ${result.track.size} points")
+        // The iPhone app learns from the info that a workout waits, without waiting for a reconnect
+        com.wristlink.service.WristLinkService.companionServer?.notifyInfo()
         WorkoutState.setFinished(WorkoutState.Finished.Saved(id))
         WorkoutState.reset()
 

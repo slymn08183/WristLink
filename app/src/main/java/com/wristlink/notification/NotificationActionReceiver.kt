@@ -22,10 +22,17 @@ class NotificationActionReceiver : BroadcastReceiver() {
         const val EXTRA_NOTIFICATION_UIDS = "notification_uids"
 
         /**
-         * Set this callback to handle notification actions.
-         * Called with (notificationUid, actionId).
+         * The ANCS session the UIDs belong to (NotificationRenderer.session). iOS reuses UIDs in
+         * the next session, so an action from an older one would hit a different notification.
+         * Intents without it (calls) count as current.
          */
-        var onAction: ((UInt, Byte) -> Unit)? = null
+        const val EXTRA_SESSION = "ancs_session"
+
+        /**
+         * Set this callback to handle notification actions.
+         * Called with (notificationUid, actionId, session or null when the intent didn't say).
+         */
+        var onAction: ((UInt, Byte, Int?) -> Unit)? = null
     }
 
     override fun onReceive(context: Context, intent: Intent) {
@@ -41,11 +48,12 @@ class NotificationActionReceiver : BroadcastReceiver() {
 
         val uids = intent.getIntArrayExtra(EXTRA_NOTIFICATION_UIDS)
             ?: intArrayOf(intent.getIntExtra("notification_uid", -1))
+        val session = if (intent.hasExtra(EXTRA_SESSION)) intent.getIntExtra(EXTRA_SESSION, 0) else null
 
         for (uid in uids) {
             if (uid == -1) continue
-            Log.d(TAG, "Action received: uid=$uid actionId=$actionId")
-            onAction?.invoke(uid.toUInt(), actionId)
+            Log.d(TAG, "Action received: uid=$uid actionId=$actionId session=$session")
+            onAction?.invoke(uid.toUInt(), actionId, session)
         }
     }
 }

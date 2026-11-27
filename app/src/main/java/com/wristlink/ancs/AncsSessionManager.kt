@@ -10,6 +10,10 @@ import kotlinx.coroutines.flow.asStateFlow
 /**
  * Manages ANCS session state: tracks active notification UIDs,
  * handles session lifecycle, and coordinates event processing.
+ *
+ * Events and Data Source fragments arrive on the Bluetooth library's callback thread, while
+ * resets come from the state machine's coroutines, so the UID set and the parser's buffer are
+ * only touched under [lock].
  */
 class AncsSessionManager {
 
@@ -20,6 +24,8 @@ class AncsSessionManager {
         ACTIVE,
         RECONNECTING
     }
+
+    private val lock = Any()
 
     private val _sessionState = MutableStateFlow(SessionState.DISCONNECTED)
     val sessionState: StateFlow<SessionState> = _sessionState.asStateFlow()
@@ -36,7 +42,7 @@ class AncsSessionManager {
     private val activeUids = mutableSetOf<UInt>()
 
     /** Parser for Data Source fragments. */
-    val attributeParser = AncsAttributeParser()
+    private val attributeParser = AncsAttributeParser()
 
     fun updateState(state: SessionState) {
         _sessionState.value = state
@@ -48,32 +54,51 @@ class AncsSessionManager {
     fun processNotificationEvent(data: ByteArray) {
         val event = AncsNotificationEvent.parse(data) ?: return
 
-        when {
-            event.isAdded || event.isModified -> {
-                activeUids.add(event.notificationUid)
+        synchronized(lock) {
+            when {
+                event.isAdded || event.isModified -> activeUids.add(event.notificationUid)
+                event.isRemoved -> activeUids.remove(event.notificationUid)
             }
-            event.isRemoved -> {
-                activeUids.remove(event.notificationUid)
-            }
+            // Under the lock too, so events keep their order against a concurrent reset
+            _events.tryEmit(event)
+            appendLog(event.toString())
         }
+    }
 
-        _events.tryEmit(event)
-        appendLog(event.toString())
+    /**
+     * Seconds since the epoch at first, so numbers from before a restart (still on notifications
+     * the watch shows) are never handed out again; one up per ANCS subscription.
+     */
+    private var session = (System.currentTimeMillis() / 1000).toInt()
+
+    /**
+     * ANCS is about to be subscribed (again): iOS numbers notifications anew per session, so
+     * UIDs seen so far mean nothing from here on. Called before the subscription, so the marker
+     * comes before every event of the new session in [events].
+     */
+    fun startNewSession() {
+        synchronized(lock) {
+            session++
+            activeUids.clear()
+            attributeParser.reset()
+            _events.tryEmit(AncsNotificationEvent.sessionStart(session))
+        }
     }
 
     /**
      * Process a Data Source fragment. Returns parsed result if complete.
      */
-    fun processDataSourceFragment(data: ByteArray): Any? {
-        return attributeParser.feedFragment(data)
-    }
+    fun processDataSourceFragment(data: ByteArray): Any? =
+        synchronized(lock) { attributeParser.feedFragment(data) }
 
     /**
      * Clear session state on disconnect. UIDs become invalid after disconnect.
      */
     fun onDisconnected() {
-        activeUids.clear()
-        attributeParser.reset()
+        synchronized(lock) {
+            activeUids.clear()
+            attributeParser.reset()
+        }
         _sessionState.value = SessionState.DISCONNECTED
     }
 
@@ -81,14 +106,16 @@ class AncsSessionManager {
      * Reset for a fresh session (e.g., after long disconnect).
      */
     fun resetSession() {
-        activeUids.clear()
-        attributeParser.reset()
-        _eventLog.value = emptyList()
+        synchronized(lock) {
+            activeUids.clear()
+            attributeParser.reset()
+            _eventLog.value = emptyList()
+        }
     }
 
-    fun isUidActive(uid: UInt): Boolean = uid in activeUids
+    fun isUidActive(uid: UInt): Boolean = synchronized(lock) { uid in activeUids }
 
-    fun getActiveUidCount(): Int = activeUids.size
+    fun getActiveUidCount(): Int = synchronized(lock) { activeUids.size }
 
     private fun appendLog(message: String) {
         val current = _eventLog.value

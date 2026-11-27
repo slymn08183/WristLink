@@ -218,6 +218,12 @@ final class WorkoutSync: ObservableObject {
     private var ackedThisRun: Set<Int> = []
     private var timeout: DispatchWorkItem?
     private var lastFailure: Date?
+    /// When bytes last arrived on the sync channel (system uptime, s).
+    private var lastActivity: TimeInterval = 0
+    /// A long track takes a while over Bluetooth, and the reply may wait behind the summary.
+    private static let replyTimeout: TimeInterval = 120
+    /// Past the timeout, given up only once the sync channel has been quiet this long.
+    private static let idleLimit: TimeInterval = 30
 
     private static var folder: URL { URL.documentsDirectory.appending(path: "workouts", directoryHint: .isDirectory) }
     private static var indexURL: URL { folder.appending(path: "index.json") }
@@ -260,8 +266,12 @@ final class WorkoutSync: ObservableObject {
             finish(error: nil)
             return
         }
-        guard let workout = try? JSONDecoder().decode(WorkoutRecord.self, from: data) else {
-            finish(error: "Couldn't read a workout from the watch")
+        let workout: WorkoutRecord
+        do {
+            workout = try JSONDecoder().decode(WorkoutRecord.self, from: data)
+        } catch {
+            // Say what didn't fit, so a workout the watch keeps sending can be looked into
+            finish(error: "Couldn't read a workout from the watch (\(Self.describe(error)))")
             return
         }
         guard !ackedThisRun.contains(workout.watchId) else {
@@ -289,9 +299,21 @@ final class WorkoutSync: ObservableObject {
         }
     }
 
+    /// A `workout` message arrived too garbled to even read its envelope (WatchLink). The watch
+    /// keeps the workout and sends it again; say so rather than waiting out the timeout.
+    func handleUnreadable() {
+        finish(error: "A workout from the watch arrived damaged; it will be sent again")
+    }
+
     /// The link dropped mid-run; the watch still has everything that wasn't acknowledged.
     func linkLost() {
         if syncing { finish(error: "Watch disconnected") }
+    }
+
+    /// Bytes arrived on the sync channel (WatchLink): a reply still coming in, or waiting behind
+    /// another one, keeps the run alive past the timeout.
+    func noteActivity(at time: TimeInterval) {
+        if syncing { lastActivity = time }
     }
 
     private func requestNext() {
@@ -302,15 +324,54 @@ final class WorkoutSync: ObservableObject {
         send(["op": "nextWorkout"])
         // A long track takes a while over Bluetooth, but a watch that never answers mustn't
         // leave this running forever
+        lastActivity = ProcessInfo.processInfo.systemUptime
+        armTimeout(after: Self.replyTimeout)
+    }
+
+    private func armTimeout(after seconds: TimeInterval) {
         timeout?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.finish(error: "The watch didn't send the workout") }
+        let work = DispatchWorkItem { [weak self] in self?.timeoutFired() }
         timeout = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 120, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
+    }
+
+    private func timeoutFired() {
+        guard syncing else { return }
+        let quiet = ProcessInfo.processInfo.systemUptime - lastActivity
+        if quiet < Self.idleLimit {
+            armTimeout(after: Self.idleLimit - quiet)
+        } else {
+            finish(error: "The watch didn't send the workout")
+        }
+    }
+
+    /// Where decoding stopped, in a few words.
+    private static func describe(_ error: Error) -> String {
+        guard let decoding = error as? DecodingError else { return error.localizedDescription }
+        let context: DecodingError.Context
+        switch decoding {
+        case .dataCorrupted(let c): context = c
+        case .keyNotFound(_, let c): context = c
+        case .typeMismatch(_, let c): context = c
+        case .valueNotFound(_, let c): context = c
+        @unknown default: return error.localizedDescription
+        }
+        let path = context.codingPath
+            .map { key -> String in
+                if let index = key.intValue { return String(index) }
+                return key.stringValue
+            }
+            .joined(separator: ".")
+        return path.isEmpty ? context.debugDescription : "\(path): \(context.debugDescription)"
     }
 
     private func finish(error: String?) {
         timeout?.cancel()
-        guard syncing else { return }
+        guard syncing else {
+            // A failure after the run ended (a late, unreadable reply) still shows
+            if let error { lastError = error }
+            return
+        }
         syncing = false
         lastError = error
         lastFailure = error == nil ? nil : Date()

@@ -38,26 +38,66 @@ final class HealthSync: ObservableObject {
 
     private let store = HKHealthStore()
     private static let batchSize = 100
+    /// How long a batch may take before the run is given up, unless bytes are still arriving.
+    private static let replyTimeout: TimeInterval = 60
+    /// Given up only after the sync channel has been quiet this long.
+    private static let idleLimit: TimeInterval = 30
     private var savedThisRun = 0
     /// Set when Apple Health refused some samples this run, shown once the run ends.
     private var refusedNote: String?
+    private var timeout: DispatchWorkItem?
+    /// When bytes last arrived on the sync channel (system uptime, s).
+    private var lastActivity: TimeInterval = 0
 
     /// Ask the watch for what it has, unless a sync is already running.
     func start() {
-        guard !syncing, HKHealthStore.isHealthDataAvailable(), let send else { return }
+        guard !syncing, HKHealthStore.isHealthDataAvailable(), send != nil else { return }
         syncing = true
         lastError = nil
         savedThisRun = 0
         refusedNote = nil
-        send(["op": "pull", "after": 0, "max": Self.batchSize])
+        requestBatch(after: 0)
+    }
+
+    /// Bytes arrived on the sync channel (WatchLink): a reply still on its way, perhaps queued
+    /// behind a long summary, keeps the run alive.
+    func noteActivity(at time: TimeInterval) {
+        if syncing { lastActivity = time }
+    }
+
+    private func requestBatch(after id: Int64) {
+        send?(["op": "pull", "after": id, "max": Self.batchSize])
+        // A reply lost on the way (the link dropped a message) mustn't leave this running for good
+        lastActivity = ProcessInfo.processInfo.systemUptime
+        armTimeout(after: Self.replyTimeout)
+    }
+
+    private func armTimeout(after seconds: TimeInterval) {
+        timeout?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.timeoutFired() }
+        timeout = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
+    }
+
+    private func timeoutFired() {
+        guard syncing else { return }
+        let quiet = ProcessInfo.processInfo.systemUptime - lastActivity
+        if quiet < Self.idleLimit {
+            armTimeout(after: Self.idleLimit - quiet)
+        } else {
+            finish(error: "The watch didn't send the samples.")
+        }
     }
 
     /// A complete message arrived on the sync channel.
     func handle(_ data: Data) {
+        timeout?.cancel()
         guard let batch = try? JSONDecoder().decode(Batch.self, from: data), batch.op == "batch" else {
             if syncing { finish(error: "Couldn't read the samples the watch sent.") }
             return
         }
+        // A reply that came after the run gave up carries on with it
+        syncing = true
         guard let lastId = batch.items.last?.id else {
             finish(error: nil)
             return
@@ -101,7 +141,7 @@ final class HealthSync: ObservableObject {
         }
         send?(["op": "ack", "upTo": lastId])
         if batch.more {
-            send?(["op": "pull", "after": lastId, "max": Self.batchSize])
+            requestBatch(after: lastId)
         } else {
             finish(error: nil)
         }
@@ -135,6 +175,7 @@ final class HealthSync: ObservableObject {
     }
 
     private func finish(error: String?) {
+        timeout?.cancel()
         syncing = false
         lastError = error ?? refusedNote
         if error == nil { lastSync = Date() }

@@ -22,6 +22,31 @@ struct WatchInfo: Decodable, Equatable {
     let workoutsPending: Int?
     /// The latest heart rate the watch measured.
     let hr: HeartRate?
+    /// A notification that only carries what changes (the full info didn't fit one packet);
+    /// the rest is kept from the last full read. Absent from reads and older watch apps.
+    let compact: Bool?
+
+    /// A compact notification on top of the info known so far.
+    func merged(over old: WatchInfo?) -> WatchInfo {
+        guard compact == true, let old else { return self }
+        return WatchInfo(
+            protocolVersion: protocolVersion,
+            app: app ?? old.app,
+            battery: battery,
+            charging: charging,
+            connectedPct: connectedPct ?? old.connectedPct,
+            drops: drops,
+            medianDelayMs: medianDelayMs ?? old.medianDelayMs,
+            notifications: notifications,
+            model: model ?? old.model,
+            pending: pending ?? old.pending,
+            sleepSupported: sleepSupported ?? old.sleepSupported,
+            weatherAt: weatherAt ?? old.weatherAt,
+            workoutsPending: workoutsPending ?? old.workoutsPending,
+            hr: hr ?? old.hr,
+            compact: nil
+        )
+    }
 
     struct HeartRate: Decodable, Equatable {
         let bpm: Double?
@@ -36,6 +61,7 @@ struct WatchInfo: Decodable, Equatable {
         case app, battery, charging, connectedPct, drops, medianDelayMs, notifications
         case model, pending, sleepSupported, weatherAt
         case workoutsPending, hr
+        case compact
     }
 }
 
@@ -93,6 +119,13 @@ final class WatchLink: NSObject, ObservableObject {
     private var syncBuffer = Data()
     /// Pieces waiting for the link to take more writes without response.
     private var outbox: [Data] = []
+    /// The outbox was cleared, maybe in the middle of a message: the next one starts with a
+    /// newline, which ends the partial line the watch may hold (it ignores the junk line).
+    private var leadWithNewline = false
+    /// Failed attempts to turn on notifications, per characteristic, for the retry backoff.
+    private var subscribeFailures: [CBUUID: Int] = [:]
+    /// [info] came from the watch over the current connection (not kept from an earlier one).
+    private var infoIsCurrent = false
     /// The summary is asked for once per connection by itself; after that on refresh and syncs.
     private var summaryAsked = false
     /// The last sample sync saved something, so the summary is out of date once workouts are done.
@@ -102,6 +135,9 @@ final class WatchLink: NSObject, ObservableObject {
 
     /// The companion protocol the watch speaks (0 until its info has been read).
     var protocolVersion: Int { info?.protocolVersion ?? 0 }
+
+    /// Replies to requests arrive as notifications: nothing is asked before they are on.
+    private var syncReady: Bool { syncCharacteristic?.isNotifying == true }
 
     override init() {
         super.init()
@@ -179,7 +215,7 @@ final class WatchLink: NSObject, ObservableObject {
 
     /// Ask the watch for its summary (protocol 6): everything it keeps the first time, then two weeks.
     func refreshSummary() {
-        guard protocolVersion >= 6, syncCharacteristic?.isNotifying == true else { return }
+        guard protocolVersion >= 6, syncReady else { return }
         summaryAsked = true
         summary.request()
     }
@@ -196,7 +232,7 @@ final class WatchLink: NSObject, ObservableObject {
     private func healthSyncFinished(saved: Int?) {
         let asked = userAskedSync
         userAskedSync = false
-        guard protocolVersion >= 6, syncCharacteristic != nil else { return }
+        guard protocolVersion >= 6, syncReady else { return }
         if (saved ?? 0) > 0 { summaryStale = true }
         if saved != nil { workouts.start(automatic: !asked) }
         if !workouts.syncing && summaryStale {
@@ -234,7 +270,14 @@ final class WatchLink: NSObject, ObservableObject {
     /// Route one complete message from the sync channel by its "op".
     private func handleMessage(_ data: Data) {
         struct Envelope: Decodable { let op: String; let error: String? }
-        guard let envelope = try? JSONDecoder().decode(Envelope.self, from: data) else { return }
+        guard let envelope = try? JSONDecoder().decode(Envelope.self, from: data) else {
+            // Usually the empty or junk line the watch ends a cut-off message with. A workout
+            // garbled on the way is worth saying, instead of waiting out the timeout in silence.
+            if data.range(of: Data("\"op\":\"workout\"".utf8)) != nil {
+                workouts.handleUnreadable()
+            }
+            return
+        }
         switch envelope.op {
         case "batch":
             health.handle(data)
@@ -263,7 +306,13 @@ final class WatchLink: NSObject, ObservableObject {
     /// as long as only one kind is used.
     private func sendSync(_ message: [String: Any]) {
         guard let watch, let syncCharacteristic,
-              var data = try? JSONSerialization.data(withJSONObject: message) else { return }
+              let json = try? JSONSerialization.data(withJSONObject: message) else { return }
+        var data = Data()
+        if leadWithNewline {
+            leadWithNewline = false
+            data.append(0x0A)
+        }
+        data.append(json)
         data.append(0x0A)
         let size = max(20, watch.maximumWriteValueLength(for: .withoutResponse))
         var pieces: [Data] = []
@@ -287,6 +336,55 @@ final class WatchLink: NSObject, ObservableObject {
         while !outbox.isEmpty && watch.canSendWriteWithoutResponse {
             watch.writeValue(outbox.removeFirst(), for: syncCharacteristic, type: .withoutResponse)
         }
+    }
+
+    /// Forget half-received and half-sent messages: after a drop, a service change or a new
+    /// subscription neither side continues where it was.
+    private func resetSyncStreams() {
+        syncBuffer.removeAll()
+        if !outbox.isEmpty { outbox.removeAll() }
+        // Even an empty outbox may have stopped mid-message (iOS took part of it already)
+        leadWithNewline = true
+    }
+
+    /// Tell the running syncs that bytes are arriving, so a long reply that is still coming in
+    /// (a workout queued behind the summary) isn't given up on.
+    private func noteSyncActivity() {
+        let now = ProcessInfo.processInfo.systemUptime
+        health.noteActivity(at: now)
+        workouts.noteActivity(at: now)
+        summary.noteActivity(at: now)
+    }
+
+    /// Start what the watch's info says is waiting, once replies can arrive.
+    private func startSyncsIfNeeded(_ info: WatchInfo) {
+        guard syncReady else { return }
+        // The watch announces waiting samples through info; fetch them while iOS lets us run.
+        // Workouts follow the samples; on their own only when no samples are waiting.
+        if (info.pending ?? 0) > 0 {
+            health.start()
+        } else if info.protocolVersion >= 6 && (info.workoutsPending ?? 0) > 0 && !health.syncing {
+            workouts.start(automatic: true)
+        }
+        if info.protocolVersion >= 6 && !summaryAsked {
+            refreshSummary()
+        }
+        // Same for the weather: info tells how old the watch's forecast is
+        if info.protocolVersion >= 4 {
+            weather.watchReported(weatherAt: info.weatherAt)
+        }
+    }
+
+    /// The sync characteristic is gone (link down, or the watch's services changed): what was
+    /// asked over it won't be answered.
+    private func syncChannelLost() {
+        syncCharacteristic = nil
+        resetSyncStreams()
+        health.linkLost()
+        workouts.linkLost()
+        summary.linkLost()
+        summaryAsked = false
+        infoIsCurrent = false
     }
 
     private func attach(_ peripheral: CBPeripheral) {
@@ -335,13 +433,8 @@ extension WatchLink: CBCentralManagerDelegate {
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         guard peripheral == watch else { return }
-        syncCharacteristic = nil
-        syncBuffer.removeAll()
-        outbox.removeAll()
-        health.linkLost()
-        workouts.linkLost()
-        summary.linkLost()
-        summaryAsked = false
+        syncChannelLost()
+        subscribeFailures.removeAll()
         state = .connecting
         central.connect(peripheral)
     }
@@ -350,13 +443,44 @@ extension WatchLink: CBCentralManagerDelegate {
 extension WatchLink: CBPeripheralDelegate {
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
+        let uuid = characteristic.uuid
+        guard uuid == Self.syncUUID || uuid == Self.infoUUID else { return }
+        if uuid == Self.syncUUID {
+            // A message half received before the change won't be finished after it
+            resetSyncStreams()
+        }
+        if let error {
+            retrySubscribing(peripheral, characteristic, error: error)
+            return
+        }
+        subscribeFailures[uuid] = nil
         // Replies to requests arrive as notifications, so ask for settings only once they are on.
         // Say first what this app can do: it fetches icons and album art for the watch.
-        if characteristic.uuid == Self.syncUUID && characteristic.isNotifying {
+        if uuid == Self.syncUUID && characteristic.isNotifying {
             sendSync(["op": "hello", "features": ["images"]])
             refreshSettings()
-            // If the info read came back first, the summary waited for this
+            // If the info read came back first, the syncs it asked for waited for this
+            if infoIsCurrent, let info { startSyncsIfNeeded(info) }
             if !summaryAsked { refreshSummary() }
+        }
+    }
+
+    /// Turning on notifications failed (the watch app restarting, a busy link): try again a few
+    /// times, waiting longer each time. Without them no reply would ever arrive.
+    private func retrySubscribing(_ peripheral: CBPeripheral, _ characteristic: CBCharacteristic, error: Error) {
+        let uuid = characteristic.uuid
+        let failures = (subscribeFailures[uuid] ?? 0) + 1
+        subscribeFailures[uuid] = failures
+        guard failures <= 6 else { return }
+        let delay = Double(1 << min(failures - 1, 5))
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, peripheral == self.watch, peripheral.state == .connected,
+                  !characteristic.isNotifying else { return }
+            // A rediscovery meanwhile brings its own characteristic and subscribes it
+            let current = uuid == Self.syncUUID ? self.syncCharacteristic : characteristic.service?.characteristics?
+                .first(where: { $0.uuid == uuid })
+            guard current === characteristic else { return }
+            peripheral.setNotifyValue(true, for: characteristic)
         }
     }
 
@@ -373,7 +497,12 @@ extension WatchLink: CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
-        // The watch app was updated or restarted and its services changed: look again
+        // The watch app was updated or restarted and its services changed: look again. Nothing
+        // asked over the old characteristic will be answered, and a half message is junk now.
+        if invalidatedServices.contains(where: { $0.uuid == Self.serviceUUID }) {
+            syncChannelLost()
+            subscribeFailures.removeAll()
+        }
         peripheral.discoverServices([Self.serviceUUID])
     }
 
@@ -396,33 +525,39 @@ extension WatchLink: CBPeripheralDelegate {
         guard let data = characteristic.value else { return }
         switch characteristic.uuid {
         case Self.infoUUID:
-            guard let decoded = try? JSONDecoder().decode(WatchInfo.self, from: data) else { return }
+            guard let received = try? JSONDecoder().decode(WatchInfo.self, from: data) else {
+                // The info didn't fit one notification: the watch only says it changed
+                struct Changed: Decodable { let changed: Bool? }
+                if (try? JSONDecoder().decode(Changed.self, from: data))?.changed == true {
+                    peripheral.readValue(for: characteristic)
+                }
+                return
+            }
+            // A compact notification carries only what changes; before any full read, read it
+            if received.compact == true && info == nil {
+                peripheral.readValue(for: characteristic)
+            }
+            let decoded = received.merged(over: info)
             info = decoded
+            infoIsCurrent = true
             health.deviceModel = decoded.model
             health.watchAppVersion = decoded.app
             workouts.deviceModel = decoded.model
             workouts.watchAppVersion = decoded.app
-            // The watch announces waiting samples through info; fetch them while iOS lets us run.
-            // Workouts follow the samples; on their own only when no samples are waiting.
-            if (decoded.pending ?? 0) > 0 && syncCharacteristic != nil {
-                health.start()
-            } else if decoded.protocolVersion >= 6 && (decoded.workoutsPending ?? 0) > 0
-                        && syncCharacteristic != nil && !health.syncing {
-                workouts.start(automatic: true)
-            }
-            if decoded.protocolVersion >= 6 && !summaryAsked {
-                refreshSummary()
-            }
-            // Same for the weather: info tells how old the watch's forecast is
-            if decoded.protocolVersion >= 4 && syncCharacteristic != nil {
-                weather.watchReported(weatherAt: decoded.weatherAt)
-            }
+            startSyncsIfNeeded(decoded)
         case Self.syncUUID:
-            syncBuffer.append(data)
-            while let newline = syncBuffer.firstIndex(of: 0x0A) {
-                let message = syncBuffer[syncBuffer.startIndex..<newline]
-                syncBuffer.removeSubrange(syncBuffer.startIndex...newline)
-                handleMessage(Data(message))
+            noteSyncActivity()
+            // Only the new bytes are searched: a summary is ~100 KB in a few hundred pieces
+            var start = data.startIndex
+            while let newline = data[start...].firstIndex(of: 0x0A) {
+                syncBuffer.append(data[start..<newline])
+                let message = syncBuffer
+                syncBuffer = Data()
+                start = data.index(after: newline)
+                handleMessage(message)
+            }
+            if start < data.endIndex {
+                syncBuffer.append(data[start...])
             }
         default:
             break

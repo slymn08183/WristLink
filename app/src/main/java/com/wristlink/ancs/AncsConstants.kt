@@ -33,6 +33,8 @@ object AncsConstants {
     const val EVENT_ID_ADDED: Byte = 0
     const val EVENT_ID_MODIFIED: Byte = 1
     const val EVENT_ID_REMOVED: Byte = 2
+    /** Internal marker, never sent by iOS (see AncsNotificationEvent.isSessionStart). */
+    const val EVENT_ID_SESSION_START: Byte = -1
 
     // --- EventFlags (Notification Source byte 1, bitmask) ---
     const val EVENT_FLAG_SILENT: Byte = (1 shl 0).toByte()
