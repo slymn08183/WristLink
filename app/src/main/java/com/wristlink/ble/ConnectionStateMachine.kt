@@ -7,6 +7,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -45,6 +46,12 @@ class ConnectionStateMachine(
         /** Right after Bluetooth turns on, the paired-device list can take a moment to fill. */
         private const val BONDED_LIST_RETRIES = 10
         private const val BONDED_LIST_RETRY_MS = 500L
+
+        /** CONNECTING/RECONNECTING this long means the attempt got lost (watchdog, WristLinkService). */
+        const val CONNECTING_STUCK_MS = 2 * 60_000L
+
+        /** Time for a kicked, stuck link to close before connecting again. */
+        private const val STUCK_RESTART_DELAY_MS = 1_500L
     }
 
     enum class State {
@@ -227,6 +234,10 @@ class ConnectionStateMachine(
         if (!autoReconnectEnabled) return
         if (!bondManager.isBluetoothEnabled()) return
         val stuckState = _state.value
+        if (stuckState == State.CONNECTING || stuckState == State.RECONNECTING) {
+            restartStuckConnect(stuckState)
+            return
+        }
         if (stuckState != State.WAITING_FOR_PHONE && stuckState != State.FAILED) return
         if (!bondManager.hasPairedPhone()) return
 
@@ -238,6 +249,32 @@ class ConnectionStateMachine(
         reconnectAttempt = 0
         currentBackoffMs = INITIAL_BACKOFF_MS
         reconnectToPairedPhone()
+    }
+
+    /**
+     * Watchdog entry for an attempt that neither connected nor failed for minutes (a direct
+     * attempt gives up within a minute, so something got lost). Close whatever the link is
+     * doing, give it a moment, and start over. The DISCONNECTED this causes is ignored while
+     * WAITING_TO_RECONNECT.
+     */
+    private fun restartStuckConnect(stuckState: State) {
+        if (!isPairedIphone(targetDevice ?: bondManager.getBondedDevice())) return
+        Log.i(TAG, "Watchdog kick: $stuckState for too long, starting over")
+        reconnectJob?.cancel()
+        _state.value = State.WAITING_TO_RECONNECT
+        connectionManager.disconnectDevice()
+        reconnectJob = scope.launch {
+            delay(STUCK_RESTART_DELAY_MS)
+            reconnectAttempt = 0
+            currentBackoffMs = INITIAL_BACKOFF_MS
+            reconnectToPairedPhone()
+        }
+    }
+
+    /** The service is going away: nothing may run on after it. */
+    fun stop() {
+        reconnectJob?.cancel()
+        scope.cancel()
     }
 
     /**

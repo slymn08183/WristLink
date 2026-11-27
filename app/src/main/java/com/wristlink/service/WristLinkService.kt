@@ -263,13 +263,21 @@ class WristLinkService : Service() {
         // Watchdog: Android's background connect dies silently when the iPhone rotates its
         // BLE address, leaving WAITING_FOR_PHONE forever with the phone in range. Kick the
         // state machine when that state has visibly outlived the rotation interval.
+        // An attempt that neither connects nor fails (CONNECTING/RECONNECTING for minutes) gets
+        // the same treatment: a direct attempt gives up well within a minute on its own.
         serviceScope.launch {
             while (true) {
                 delay(WATCHDOG_INTERVAL_MS)
-                if (sm.state.value == ConnectionStateMachine.State.WAITING_FOR_PHONE &&
-                    System.currentTimeMillis() - lastStateChangeMs >= WATCHDOG_STUCK_MS
-                ) {
+                val state = sm.state.value
+                val stuckFor = System.currentTimeMillis() - lastStateChangeMs
+                if (state == ConnectionStateMachine.State.WAITING_FOR_PHONE && stuckFor >= WATCHDOG_STUCK_MS) {
                     Log.i(TAG, "Watchdog: WAITING_FOR_PHONE too long, kicking reconnect")
+                    sm.kickReconnect()
+                } else if ((state == ConnectionStateMachine.State.CONNECTING ||
+                        state == ConnectionStateMachine.State.RECONNECTING) &&
+                    stuckFor >= ConnectionStateMachine.CONNECTING_STUCK_MS
+                ) {
+                    Log.i(TAG, "Watchdog: $state for ${stuckFor / 1000} s, kicking reconnect")
                     sm.kickReconnect()
                 }
             }

@@ -42,6 +42,10 @@ class BleConnectionManager(
         private const val DESIRED_MTU = 256
         private const val BOND_TIMEOUT_MS = 30_000L
 
+        /** [speedUpForTransfer] owners. */
+        const val OWNER_IMAGES = "images"
+        const val OWNER_COMPANION = "companion"
+
         // Standard Battery Service, which iOS offers to bonded accessories
         private val BATTERY_SERVICE_UUID = UUID.fromString("0000180f-0000-1000-8000-00805f9b34fb")
         private val BATTERY_LEVEL_UUID = UUID.fromString("00002a19-0000-1000-8000-00805f9b34fb")
@@ -170,9 +174,7 @@ class BleConnectionManager(
 
         // Timeout if user doesn't accept pairing within 30s
         bondTimeoutRunnable = Runnable {
-            Log.e(TAG, "Bond timeout — user did not accept pairing in ${BOND_TIMEOUT_MS}ms")
-            unregisterBondReceiver()
-            _connectionState.value = ConnectionState.DISCONNECTED
+            failSetup("bond timeout — user did not accept pairing in ${BOND_TIMEOUT_MS}ms")
         }
         mainHandler.postDelayed(bondTimeoutRunnable!!, BOND_TIMEOUT_MS)
     }
@@ -204,10 +206,7 @@ class BleConnectionManager(
                         afterBondEstablished()
                     }
                     BluetoothDevice.BOND_NONE -> {
-                        Log.e(TAG, "Bond removed/failed — user may have rejected pairing")
-                        cancelBondTimeout()
-                        unregisterBondReceiver()
-                        _connectionState.value = ConnectionState.DISCONNECTED
+                        failSetup("bond removed/failed — user may have rejected pairing")
                     }
                 }
             }
@@ -233,14 +232,36 @@ class BleConnectionManager(
     }
 
     /**
+     * Setup can't go on (pairing refused or timed out, no ANCS): close the link first and only
+     * then report DISCONNECTED. Reported while the link was still up, the state machine would
+     * "reconnect" on a connected link, which completes at once without setting anything up and
+     * left the watch on Connecting with no notifications.
+     */
+    private fun failSetup(reason: String) {
+        Log.e(TAG, "Setup failed: $reason — disconnecting")
+        cancelBondTimeout()
+        unregisterBondReceiver()
+        mainHandler.post {
+            if (!isConnected) {
+                _connectionState.value = ConnectionState.DISCONNECTED
+                return@post
+            }
+            cancelQueue()
+            // onServicesInvalidated reports it too once the link is down, if services were found
+            disconnect()
+                .then { _connectionState.value = ConnectionState.DISCONNECTED }
+                .enqueue()
+        }
+    }
+
+    /**
      * After bonding, re-discover GATT services.
      * iOS now exposes ANCS since we are bonded/encrypted.
      */
     private fun afterBondEstablished() {
         val gatt = currentGatt
         if (gatt == null) {
-            Log.e(TAG, "No GATT reference — cannot re-discover services")
-            _connectionState.value = ConnectionState.DISCONNECTED
+            failSetup("no GATT reference — cannot re-discover services")
             return
         }
 
@@ -277,8 +298,7 @@ class BleConnectionManager(
                     Log.i(TAG, "Retry discoverServices: $retried")
                     waitForServiceDiscoveryAndSubscribe(gatt, attempt + 1)
                 } else {
-                    Log.e(TAG, "ANCS not found after bonding + retries")
-                    _connectionState.value = ConnectionState.DISCONNECTED
+                    failSetup("ANCS not found after bonding + retries")
                 }
             }
             .enqueue()
@@ -368,7 +388,9 @@ class BleConnectionManager(
         setupAms()
         setupBattery()
         readDeviceName()
-        relaxConnectionInterval()
+        // Setup runs again after a Service Changed; don't slow down a transfer still going
+        val transferring = synchronized(fastIntervalOwners) { fastIntervalOwners.isNotEmpty() }
+        if (!transferring) relaxConnectionInterval()
     }
 
     /**
@@ -385,20 +407,39 @@ class BleConnectionManager(
             .enqueue()
     }
 
+    /** Who currently wants the fast interval (image fetches, big companion messages). */
+    private val fastIntervalOwners = mutableSetOf<String>()
+
     /**
-     * A short burst of data is coming (an icon or album art from the iPhone app): ask for the
-     * fast interval while it lasts, then go back to low power with [relaxAfterTransfer].
+     * A short burst of data is coming (an icon or album art from the iPhone app, a long workout
+     * for it): ask for the fast interval while it lasts, then go back to low power with
+     * [relaxAfterTransfer]. Each [owner] holds the fast interval until it relaxes, so one
+     * transfer ending doesn't slow down another still running.
      */
-    fun speedUpForTransfer() {
-        if (!isConnected) return
+    fun speedUpForTransfer(owner: String = OWNER_IMAGES) {
+        val first = synchronized(fastIntervalOwners) {
+            val wasEmpty = fastIntervalOwners.isEmpty()
+            fastIntervalOwners.add(owner) && wasEmpty
+        }
+        if (!first || !isConnected) return
         requestConnectionPriority(ConnectionPriorityRequest.CONNECTION_PRIORITY_HIGH)
             .fail { _, status -> Log.w(TAG, "High connection priority not accepted: $status") }
             .enqueue()
     }
 
-    fun relaxAfterTransfer() {
-        if (isConnected) relaxConnectionInterval()
+    fun relaxAfterTransfer(owner: String = OWNER_IMAGES) {
+        val last = synchronized(fastIntervalOwners) {
+            fastIntervalOwners.remove(owner) && fastIntervalOwners.isEmpty()
+        }
+        if (last && isConnected) relaxConnectionInterval()
     }
+
+    /**
+     * The ATT MTU the watch's own client negotiated with the iPhone, while connected. The
+     * companion server uses it when it has no MTU of its own for the same link.
+     */
+    val clientMtu: Int?
+        get() = if (isConnected) mtu else null
 
     /** The phone's own name, a fallback for when the watch's Bluetooth has no name for it. */
     private fun readDeviceName() {
@@ -520,6 +561,12 @@ class BleConnectionManager(
         writeAmsSubscriptions(entityUpdate)
     }
 
+    /**
+     * Called when the link drops, and also on a Service Changed indication from the iPhone while
+     * the link stays up. In that case Nordic discovers the services again and runs [initialize]
+     * once more, so ANCS gets subscribed again: report that instead of a disconnect, which would
+     * make the state machine "reconnect" a link that is still up.
+     */
     override fun onServicesInvalidated() {
         notificationSourceChar = null
         controlPointChar = null
@@ -527,12 +574,19 @@ class BleConnectionManager(
         amsRemoteCommandChar = null
         amsEntityUpdateChar = null
         amsEntityAttributeChar = null
+        if (isConnected) {
+            Log.i(TAG, "iPhone's services changed — discovering them again")
+            _connectionState.value = ConnectionState.DISCOVERING_SERVICES
+            return
+        }
         _phoneBattery.value = null
         _phoneDeviceName.value = null
         currentGatt = null
         cancelBondTimeout()
         unregisterBondReceiver()
-        _connectionState.value = ConnectionState.DISCONNECTED
+        synchronized(fastIntervalOwners) { fastIntervalOwners.clear() }
+        // enqueueConnect closes a stale link before connecting again: not a drop to react to
+        if (!reconnectingAfterDisconnect) _connectionState.value = ConnectionState.DISCONNECTED
     }
 
     fun setAncsCallbacks(
@@ -608,6 +662,10 @@ class BleConnectionManager(
         enqueueConnect(device, background = true, onFailed = onFailed)
     }
 
+    /** Set while [enqueueConnect] closes a link that was still up, so that isn't reported as a drop. */
+    @Volatile
+    private var reconnectingAfterDisconnect = false
+
     private fun enqueueConnect(device: BluetoothDevice, background: Boolean, onFailed: () -> Unit) {
         // Run on the main thread so cancelQueue() and the new request stay in order.
         mainHandler.post {
@@ -617,29 +675,47 @@ class BleConnectionManager(
 
             val generation = ++connectGeneration
             _connectionState.value = ConnectionState.CONNECTING
-            Log.i(TAG, "Attempting ${if (background) "background" else "direct"} connection to ${device.address}...")
 
-            val request = connect(device)
-            if (background) {
-                request.useAutoConnect(true)
-            } else {
-                request
-                    .retry(2, 500)       // 2 retries with 500ms delay
-                    .timeout(15000)      // 15s timeout — bonding can take time
-                    .useAutoConnect(false)
+            // connect() on a link that is still up succeeds at once without running setup again,
+            // which would leave the watch "connecting" with no ANCS subscriptions: close it first
+            if (isConnected) {
+                Log.w(TAG, "Still connected — disconnecting before connecting again")
+                reconnectingAfterDisconnect = true
+                disconnect()
+                    .then {
+                        reconnectingAfterDisconnect = false
+                        if (generation == connectGeneration) startConnect(device, background, generation, onFailed)
+                    }
+                    .enqueue()
+                return@post
             }
-            request
-                .done {
-                    Log.i(TAG, "Connected to ${device.address}")
-                }
-                .fail { _, status ->
-                    if (generation != connectGeneration) return@fail
-                    Log.e(TAG, "Connection failed to ${device.address} with status: $status")
-                    _connectionState.value = ConnectionState.DISCONNECTED
-                    onFailed()
-                }
-                .enqueue()
+            startConnect(device, background, generation, onFailed)
         }
+    }
+
+    private fun startConnect(device: BluetoothDevice, background: Boolean, generation: Int, onFailed: () -> Unit) {
+        Log.i(TAG, "Attempting ${if (background) "background" else "direct"} connection to ${device.address}...")
+
+        val request = connect(device)
+        if (background) {
+            request.useAutoConnect(true)
+        } else {
+            request
+                .retry(2, 500)       // 2 retries with 500ms delay
+                .timeout(15000)      // 15s timeout — bonding can take time
+                .useAutoConnect(false)
+        }
+        request
+            .done {
+                Log.i(TAG, "Connected to ${device.address}")
+            }
+            .fail { _, status ->
+                if (generation != connectGeneration) return@fail
+                Log.e(TAG, "Connection failed to ${device.address} with status: $status")
+                _connectionState.value = ConnectionState.DISCONNECTED
+                onFailed()
+            }
+            .enqueue()
     }
 
     /**
